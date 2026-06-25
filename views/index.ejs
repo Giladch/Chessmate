@@ -331,6 +331,57 @@
             text-shadow: 0 0 2px rgba(255, 255, 255, 0.45);
         }
 
+        /* Race bar */
+        .racebar {
+            width: 480px;
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid #34495e;
+            border-radius: 10px;
+            padding: 10px 14px;
+            margin-top: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 7px;
+        }
+        .race-top {
+            display: flex;
+            justify-content: space-between;
+            font-size: 13px;
+            color: #ecf0f1;
+        }
+        .race-status {
+            font-size: 16px;
+            font-weight: bold;
+            color: #f1c40f;
+            min-height: 20px;
+        }
+        .cooldown-track {
+            height: 7px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .cooldown-fill {
+            height: 100%;
+            width: 0%;
+            background: #2ecc71;
+            transition: width 0.1s linear;
+        }
+        .chessboard.locked {
+            opacity: 0.88;
+        }
+        .chessboard.locked .piece {
+            cursor: not-allowed;
+        }
+        .race-rules {
+            width: 480px;
+            font-size: 12px;
+            color: #9aa7b3;
+            margin-top: 8px;
+            text-align: center;
+            line-height: 1.5;
+        }
+
     </style>
 </head>
 
@@ -361,13 +412,25 @@
             <button id="offerDraw" class="btn btn-draw">Offer Draw</button>
             <button id="resignGame" class="btn btn-resign">Resign</button>
         </div>
+        <div id="raceBar" class="racebar">
+            <div class="race-top">
+                <span id="raceRole">—</span>
+                <span id="raceCounts">Moves — White 0 · Black 0</span>
+            </div>
+            <div id="raceStatus" class="race-status">Connecting…</div>
+            <div class="cooldown-track"><div id="cooldownBar" class="cooldown-fill"></div></div>
+        </div>
+        <div class="race-rules">
+            Race chess: get up to 3 moves ahead of your opponent. Leading costs time —
+            wait 3s at +1, 8s at +2, blocked at +3. White moves first.
+        </div>
     </div>
 
     <!-- External Scripts -->
     <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"
         crossorigin="anonymous"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js" crossorigin="anonymous"></script>
-    <script src="/js/chess.js"></script>
+    <script src="/js/chess.js?v=2"></script>
 </body>
 
 </html>

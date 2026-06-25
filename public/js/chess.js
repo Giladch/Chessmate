@@ -1,21 +1,49 @@
 const socket = io();
-const chess = new Chess();
+const chess = new Chess(); // used only to render the position the server sends
 const boardElement = document.getElementById("chessboard");
 
 let draggedPiece = null;
 let sourceSquare = null;
-let playerRole = "w"; // Default role
+let myColor = null; // 'w' | 'b' | null (spectator)
 let lastMove = null;
 
+let gameMoves = { w: 0, b: 0 };
+let cooldown = {
+  w: { lead: 0, blocked: false, remainingMs: 0 },
+  b: { lead: 0, blocked: false, remainingMs: 0 },
+};
+let gameOver = null;
+let myCooldownUntil = 0; // local timestamp (ms) until which I cannot move
+let lastAnnounced = null; // avoid repeating the game-over banner
+
+/* ── Material scoring values ── */
+const PIECE_VALUE = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+const START_COUNT = { p: 8, n: 2, b: 2, r: 2, q: 1 };
+const CAPTURE_ORDER = ["q", "r", "b", "n", "p"];
+
+const otherColor = (c) => (c === "w" ? "b" : "w");
+const fmt = (ms) => (Math.max(0, ms) / 1000).toFixed(1);
+
+function localRemaining() {
+  if (!myColor) return 0;
+  return Math.max(0, myCooldownUntil - Date.now());
+}
+
+function canIMove() {
+  if (!myColor || gameOver) return false;
+  if (gameMoves.w + gameMoves.b === 0 && myColor !== "w") return false;
+  const lead = gameMoves[myColor] - gameMoves[otherColor(myColor)];
+  if (lead >= 3) return false;
+  if (localRemaining() > 0) return false;
+  return true;
+}
+
 /**
- * Render the chessboard based on FEN state.
+ * Render the chessboard from the current position.
  */
 const renderBoard = () => {
   const board = chess.board();
   boardElement.innerHTML = "";
-  document
-    .querySelectorAll(".square.highlight")
-    .forEach((sq) => sq.classList.remove("highlight"));
 
   board.forEach((row, rowIndex) => {
     row.forEach((square, columnIndex) => {
@@ -27,7 +55,6 @@ const renderBoard = () => {
       squareElement.dataset.row = rowIndex;
       squareElement.dataset.column = columnIndex;
 
-      // Highlight last move
       if (
         lastMove &&
         ((lastMove.from.row === rowIndex &&
@@ -37,7 +64,6 @@ const renderBoard = () => {
         squareElement.classList.add("highlight");
       }
 
-      // Render piece
       if (square) {
         const pieceElement = document.createElement("div");
         pieceElement.classList.add(
@@ -45,7 +71,7 @@ const renderBoard = () => {
           square.color === "w" ? "white" : "black"
         );
         pieceElement.innerText = getPieceUnicode(square);
-        pieceElement.draggable = playerRole === square.color;
+        pieceElement.draggable = myColor === square.color && !gameOver;
 
         pieceElement.addEventListener("dragstart", (event) => {
           draggedPiece = pieceElement;
@@ -69,11 +95,10 @@ const renderBoard = () => {
       squareElement.addEventListener("drop", (event) => {
         event.preventDefault();
         if (draggedPiece) {
-          const targetSquare = {
+          handleMove(sourceSquare, {
             row: parseInt(squareElement.dataset.row),
             column: parseInt(squareElement.dataset.column),
-          };
-          handleMove(sourceSquare, targetSquare);
+          });
         }
       });
 
@@ -81,19 +106,65 @@ const renderBoard = () => {
     });
   });
 
-  boardElement.classList.toggle("flipped", playerRole === "b");
+  boardElement.classList.toggle("flipped", myColor === "b");
   updateScoreboard();
 };
 
 /**
- * Scoring: standard chess material values. Each player's score is the total
- * value of the opponent pieces they have captured. Derived from the current
- * board so it stays identical for both players and all spectators.
+ * Attempt a move — gated client-side by the race rules, then sent to the server
+ * (which is authoritative and re-checks everything).
  */
-const PIECE_VALUE = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
-const START_COUNT = { p: 8, n: 2, b: 2, r: 2, q: 1 };
-const CAPTURE_ORDER = ["q", "r", "b", "n", "p"];
+const handleMove = (fromSquare, toSquare) => {
+  if (!canIMove()) {
+    if (!myColor || gameOver) return;
+    const lead = gameMoves[myColor] - gameMoves[otherColor(myColor)];
+    if (gameMoves.w + gameMoves.b === 0 && myColor !== "w") {
+      showMessage("White starts the game.", "error");
+    } else if (lead >= 3) {
+      showMessage("You're 3 moves ahead — wait for your opponent.", "error");
+    } else if (localRemaining() > 0) {
+      showMessage(`On cooldown: ${fmt(localRemaining())}s`, "error");
+    }
+    return;
+  }
 
+  const from = `${String.fromCharCode(97 + fromSquare.column)}${
+    8 - fromSquare.row
+  }`;
+  const to = `${String.fromCharCode(97 + toSquare.column)}${8 - toSquare.row}`;
+  const piece = chess.get(from);
+
+  const move = { from, to };
+
+  if (piece && piece.type === "p" && (to.endsWith("8") || to.endsWith("1"))) {
+    showPromotionUI((selectedPiece) => {
+      move.promotion = selectedPiece;
+      socket.emit("move", move);
+    });
+    return;
+  }
+
+  socket.emit("move", move);
+};
+
+/**
+ * Convert piece notation to Unicode.
+ */
+const getPieceUnicode = (piece) => {
+  const unicodeMap = {
+    p: "♙",
+    r: "♖",
+    n: "♘",
+    b: "♗",
+    q: "♕",
+    k: "♔",
+  };
+  return unicodeMap[piece.type] || "";
+};
+
+/**
+ * Scoring: each player's score is the total value of opponent pieces captured.
+ */
 function updateScoreboard() {
   const cur = { w: {}, b: {} };
   chess.board().forEach((row) =>
@@ -104,8 +175,8 @@ function updateScoreboard() {
 
   let scoreWhite = 0;
   let scoreBlack = 0;
-  const capturedByWhite = []; // black pieces white has taken
-  const capturedByBlack = []; // white pieces black has taken
+  const capturedByWhite = [];
+  const capturedByBlack = [];
 
   CAPTURE_ORDER.forEach((t) => {
     const lostBlack = Math.max(0, START_COUNT[t] - (cur.b[t] || 0));
@@ -122,18 +193,12 @@ function updateScoreboard() {
 
   setText("whitePoints", scoreWhite);
   setText("blackPoints", scoreBlack);
-  renderCaptured("whiteCaptured", capturedByWhite, "cap-b"); // black glyphs
-  renderCaptured("blackCaptured", capturedByBlack, "cap-w"); // white glyphs
+  renderCaptured("whiteCaptured", capturedByWhite, "cap-b");
+  renderCaptured("blackCaptured", capturedByBlack, "cap-w");
 
   const diff = scoreWhite - scoreBlack;
   setText("whiteLead", diff > 0 ? `+${diff}` : "");
   setText("blackLead", diff < 0 ? `+${-diff}` : "");
-
-  const turn = chess.turn();
-  const wEl = document.getElementById("sideWhite");
-  const bEl = document.getElementById("sideBlack");
-  if (wEl) wEl.classList.toggle("turn", turn === "w");
-  if (bEl) bEl.classList.toggle("turn", turn === "b");
 }
 
 function setText(id, value) {
@@ -154,76 +219,66 @@ function renderCaptured(id, types, colorClass) {
 }
 
 /**
- * Handle piece move.
+ * Race status bar — role, move counts, lead and the live cooldown countdown.
  */
-const handleMove = (fromSquare, toSquare) => {
-  const from = `${String.fromCharCode(97 + fromSquare.column)}${
-    8 - fromSquare.row
-  }`;
-  const to = `${String.fromCharCode(97 + toSquare.column)}${8 - toSquare.row}`;
-  const piece = chess.get(from);
+function updateRaceUI() {
+  const role = document.getElementById("raceRole");
+  const status = document.getElementById("raceStatus");
+  const counts = document.getElementById("raceCounts");
+  const bar = document.getElementById("cooldownBar");
+  if (!status) return;
 
-  let move = { from, to };
-
-  // Handle promotion
-  if (piece && piece.type === "p" && (to.endsWith("8") || to.endsWith("1"))) {
-    showPromotionUI((selectedPiece) => {
-      move.promotion = selectedPiece;
-      socket.emit("move", move);
-    });
-    return;
+  if (role) {
+    role.textContent =
+      myColor === "w"
+        ? "You are White ⚪"
+        : myColor === "b"
+        ? "You are Black ⚫"
+        : "Spectating";
+  }
+  if (counts) {
+    counts.textContent = `Moves — White ${gameMoves.w} · Black ${gameMoves.b}`;
   }
 
-  socket.emit("move", move);
-};
+  let txt = "";
+  let pct = 0;
 
-/**
- * Handle move results from server.
- */
-socket.on("move", (moveResult) => {
-  try {
-    chess.move(moveResult);
-    lastMove = {
-      from: parseSquare(moveResult.from),
-      to: parseSquare(moveResult.to),
-    };
-    renderBoard();
-  } catch (err) {
-    console.error("Invalid move received from server", err);
+  if (gameOver) {
+    txt =
+      gameOver.reason === "draw"
+        ? "Game over — draw"
+        : `Game over — ${gameOver.winner === "w" ? "White" : "Black"} wins`;
+  } else if (!myColor) {
+    txt = "Watching the race";
+  } else if (gameMoves.w + gameMoves.b === 0 && myColor !== "w") {
+    txt = "White starts the game";
+  } else {
+    const lead = gameMoves[myColor] - gameMoves[otherColor(myColor)];
+    const rem = localRemaining();
+    if (lead >= 3) {
+      txt = "You lead by 3 — opponent must move";
+    } else if (rem > 0) {
+      const total = lead >= 2 ? 8000 : 3000;
+      txt = `Next move in ${fmt(rem)}s`;
+      pct = 100 * (1 - rem / total);
+    } else {
+      txt = lead > 0 ? `Your move — go! (lead +${lead})` : "Your move — go!";
+      pct = 100;
+    }
   }
-});
+
+  status.textContent = txt;
+  if (bar) bar.style.width = Math.max(0, Math.min(100, pct)) + "%";
+  boardElement.classList.toggle(
+    "locked",
+    !!myColor && !gameOver && !canIMove()
+  );
+}
+
+setInterval(updateRaceUI, 100);
 
 /**
- * Convert piece notation to Unicode.
- */
-const getPieceUnicode = (piece) => {
-  const unicodeMap = {
-    p: "♙",
-    r: "♖",
-    n: "♘",
-    b: "♗",
-    q: "♕",
-    k: "♔",
-    P: "♟",
-    R: "♜",
-    N: "♞",
-    B: "♝",
-    Q: "♛",
-    K: "♚",
-  };
-  return unicodeMap[piece.type] || "";
-};
-
-/**
- * Parse algebraic square (e.g., 'e4') to row/column.
- */
-const parseSquare = (notation) => ({
-  column: notation.charCodeAt(0) - 97,
-  row: 8 - parseInt(notation[1]),
-});
-
-/**
- * Promotion UI
+ * Promotion UI.
  */
 const showPromotionUI = (onSelect) => {
   const existingUI = document.querySelector(".promotion-container");
@@ -262,7 +317,7 @@ const showPromotionUI = (onSelect) => {
 };
 
 /**
- * Flash messages
+ * Flash messages.
  */
 const showMessage = (msg, type = "default") => {
   const existing = document.querySelector(".game-message");
@@ -281,7 +336,7 @@ const showMessage = (msg, type = "default") => {
 };
 
 /**
- * Confirmation popup
+ * Confirmation popup.
  */
 const showConfirmation = (message, yes, no, onYes, onNo) => {
   const overlay = document.createElement("div");
@@ -315,17 +370,14 @@ const showConfirmation = (message, yes, no, onYes, onNo) => {
 };
 
 /**
- * Game control listeners
+ * Game controls.
  */
 document.getElementById("restartGame").addEventListener("click", () => {
   showConfirmation(
     "Are you sure you want to restart?",
     "Yes",
     "No",
-    () => {
-      socket.emit("restartGame");
-      showMessage("Game restarted!", "restart");
-    },
+    () => socket.emit("restartGame"),
     () => showMessage("Restart canceled.")
   );
 });
@@ -340,22 +392,68 @@ document.getElementById("resignGame").addEventListener("click", () => {
     "Are you sure you want to resign?",
     "Yes",
     "No",
-    () => {
-      socket.emit("playerResigned");
-      showMessage("You resigned. Opponent wins!", "resign");
-    },
+    () => socket.emit("playerResigned"),
     () => showMessage("Resignation canceled.")
   );
 });
 
 /**
- * Server events
+ * Server events.
  */
-socket.on("restartGame", () => {
-  chess.reset();
-  lastMove = null;
+socket.on("playerRole", (role) => {
+  myColor = role;
   renderBoard();
-  showMessage("Game restarted!", "restart");
+  updateRaceUI();
+});
+
+socket.on("spectator", () => {
+  myColor = null;
+  renderBoard();
+  updateRaceUI();
+});
+
+socket.on("gameState", (s) => {
+  try {
+    chess.load(s.fen);
+  } catch (e) {
+    console.error("Bad FEN from server", e);
+  }
+
+  lastMove = s.lastMove
+    ? {
+        from: { row: s.lastMove.from.row, column: s.lastMove.from.col },
+        to: { row: s.lastMove.to.row, column: s.lastMove.to.col },
+      }
+    : null;
+
+  gameMoves = s.moves || { w: 0, b: 0 };
+  cooldown = s.cooldown || cooldown;
+  gameOver = s.gameOver || null;
+
+  if (myColor) {
+    const cd = cooldown[myColor];
+    myCooldownUntil = cd && cd.remainingMs ? Date.now() + cd.remainingMs : 0;
+  }
+
+  renderBoard();
+  updateRaceUI();
+  announceGameOver();
+});
+
+socket.on("moveRejected", (d) => {
+  if (d && d.waitMs) myCooldownUntil = Date.now() + d.waitMs;
+  if (d && d.reason) {
+    showMessage(
+      d.reason + (d.waitMs ? `: ${fmt(d.waitMs)}s` : ""),
+      "error"
+    );
+  }
+  updateRaceUI();
+});
+
+socket.on("notice", (n) => {
+  if (n && n.text) showMessage(n.text, n.type || "default");
+  if (n && n.type === "restart") lastAnnounced = null;
 });
 
 socket.on("offerDraw", () => {
@@ -363,38 +461,44 @@ socket.on("offerDraw", () => {
     "Opponent offered a draw.",
     "Accept",
     "Reject",
-    () => {
-      socket.emit("drawAccepted");
-      showMessage("Game ended in a draw.", "draw");
-    },
-    () => {
-      socket.emit("drawRejected");
-      showMessage("You rejected the draw.", "draw");
-    }
+    () => socket.emit("drawAccepted"),
+    () => socket.emit("drawRejected")
   );
 });
 
-socket.on("drawAccepted", () => showMessage("Game ended in a draw.", "draw"));
 socket.on("drawRejected", () => showMessage("Draw offer rejected.", "draw"));
-socket.on("playerResigned", () =>
-  showMessage("Opponent resigned. You win!", "resign")
-);
 
-socket.on("Invalid move", () => showMessage("Invalid move!", "error"));
+function announceGameOver() {
+  if (!gameOver) {
+    lastAnnounced = null;
+    return;
+  }
+  const key = `${gameOver.reason}:${gameOver.winner}`;
+  if (key === lastAnnounced) return;
+  lastAnnounced = key;
 
-socket.on("playerRole", (role) => {
-  playerRole = role;
-});
-socket.on("spectator", () => {
-  playerRole = null;
-});
-
-socket.on("boardState", (fen) => {
-  chess.load(fen);
-  renderBoard();
-});
+  let msg;
+  let type = "draw";
+  if (gameOver.reason === "checkmate") {
+    type = "resign";
+    msg =
+      gameOver.winner === myColor
+        ? "Checkmate — you win! 🎉"
+        : `Checkmate — ${gameOver.winner === "w" ? "White" : "Black"} wins.`;
+  } else if (gameOver.reason === "resign") {
+    type = "resign";
+    msg =
+      gameOver.winner === myColor
+        ? "Opponent resigned — you win!"
+        : "You resigned.";
+  } else {
+    msg = "Game over — it's a draw.";
+  }
+  showMessage(msg, type);
+}
 
 /**
- * Initial render
+ * Initial render.
  */
 renderBoard();
+updateRaceUI();
