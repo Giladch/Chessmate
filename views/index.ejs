@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chessmate</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <style>
+        /* Background */
+        body {
+            background: linear-gradient(135deg, #1e1e2f, #252542);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            color: white;
+            font-family: 'Poppins', sans-serif;
+        }
+
+        /* Chessboard Container */
+        .chessboard {
+            display: grid;
+            grid-template-columns: repeat(8, 1fr);
+            grid-template-rows: repeat(8, 1fr);
+            width: 480px;
+            height: 480px;
+            border-radius: 16px;
+            border: 5px solid #34495e;
+            box-shadow: 0px 10px 30px rgba(0, 0, 0, 0.5);
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* Chessboard Squares */
+        .square {
+            width: 60px;
+            height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 42px;
+            font-weight: bold;
+            transition: background-color 0.3s ease-in-out;
+        }
+
+        /* Light and Dark Squares */
+        .square.light {
+            background-color: #f3d9b1;
+        }
+
+        .square.dark {
+            background-color: #b07c5c;
+        }
+
+        /* Hover Effect */
+        .square:hover {
+            background-color: rgba(255, 255, 255, 0.3);
+        }
+
+        /* Chess Pieces */
+        .piece {
+            font-size: 40px;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: grab;
+            user-select: none;
+            transition: transform 0.2s ease-in-out;
+        }
+
+        /* Piece Colors */
+        .piece.white {
+            color: white;
+            text-shadow: 2px 2px 5px rgba(0, 0, 0, 0.8);
+        }
+
+        .piece.black {
+            color: black;
+            text-shadow: 2px 2px 5px rgba(255, 255, 255, 0.5);
+        }
+
+        /* Dragging Effect */
+        .dragging {
+            opacity: 0.7;
+        }
+
+        /* Board Rotation for Black Player */
+        .flipped {
+            transform: rotate(180deg);
+        }
+
+        .flipped .piece {
+            transform: rotate(180deg);
+        }
+
+        /* Title */
+        .title {
+            font-size: 36px;
+            font-weight: bold;
+            text-align: center;
+            margin-bottom: 20px;
+            color: #ecf0f1;
+            text-shadow: 2px 2px 10px rgba(255, 255, 255, 0.3);
+        }
+
+        /* Button Styles */
+        .btn {
+            padding: 12px 24px;
+            font-size: 18px;
+            font-weight: bold;
+            border-radius: 10px;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s ease-in-out;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            
+        }
+
+        .btn-restart {
+            background: #f39c12;
+            color: white;
+        }
+
+        .btn-restart:hover {
+            background: #e67e22;
+            transform: scale(1.1);
+        }
+
+        .btn-draw {
+            background: #3498db;
+            color: white;
+        }
+
+        .btn-draw:hover {
+            background: #2980b9;
+            transform: scale(1.1);
+        }
+
+        .btn-resign {
+            background: #e74c3c;
+            color: white;
+        }
+
+        .btn-resign:hover {
+            background: #c0392b;
+            transform: scale(1.1);
+        }
+
+        /* Controls Container */
+        .controls {
+            margin-top: 20px;
+            display: flex;
+            gap: 15px;
+        }
+
+        /* Modern Message Box */
+        .game-message {
+            position: fixed;
+            top: 20px;
+            right: -300px;
+            padding: 15px 25px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+            opacity: 0;
+            transition: right 0.5s ease-in-out, opacity 0.5s ease-in-out;
+            z-index: 1000;
+            color: white;
+        }
+
+        /* Show message animation */
+        .game-message.visible {
+            right: 20px;
+            opacity: 1;
+        }
+
+        /* Color Variations */
+        .message-restart {
+            background: #f39c12;
+        }
+
+        .message-resign {
+            background: #e74c3c;
+        }
+
+        .message-draw {
+            background: #3498db;
+        }
+
+        .message-default {
+            background: rgba(30, 30, 30, 0.9);
+        }
+
+        /* Overlay for Confirmation */
+        .overlay {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex; justify-content: center; align-items: center;
+        }
+        
+        .promotion-container {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+        }
+        
+        .promotion-btn {
+            font-size: 24px;
+            margin: 5px;
+            width: 50px; height: 50px;
+            border: none;
+            cursor: pointer;
+            background: none;
+        }
+        
+        .promotion-btn:hover {
+            transform: scale(1.2);
+        }        
+        
+        /* Confirmation Box */
+        .confirmation-box {
+            background: #2c3e50;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+            width: 300px;
+        }
+
+        .confirmation-box p {
+            color: #ecf0f1;
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 15px;
+        }
+
+        /* Confirmation Buttons */
+        .btn-confirm {
+            background: #27ae60;
+            color: white;
+            margin-right: 0.5rem;
+            height: 2rem;
+            width: 4rem;
+            border-radius:1rem;
+        }
+
+        .btn-cancel {
+            background: #e74c3c;
+            color: white;
+            height: 2rem;
+            width: 4rem;
+            border-radius:1rem;
+        }
+        /* Highlight last move */
+        .square.highlight {
+            background-color: rgba(255, 255, 0, 0.4) !important;
+        }
+
+
+    </style>
+</head>
+
+<body>
+    <div class="flex flex-col items-center">
+        <div class="title">♜ Chessmate ♞</div>
+        <div id="chessboard" class="chessboard"></div>
+        <div class="controls">
+            <button id="restartGame" class="btn btn-restart">Restart Game</button>
+            <button id="offerDraw" class="btn btn-draw">Offer Draw</button>
+            <button id="resignGame" class="btn btn-resign">Resign</button>
+        </div>
+    </div>
+
+    <!-- External Scripts -->
+    <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"
+        crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js" crossorigin="anonymous"></script>
+    <script src="/js/chess.js"></script>
+</body>
+
+</html>
