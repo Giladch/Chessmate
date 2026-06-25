@@ -19,10 +19,10 @@ const io = socket(server);
  */
 let settings = {
   raceEnabled: true,
-  leadCap: 3,
-  delaysSec: [3, 8],
+  leadCap: 2,
+  delaysSec: [15],
 };
-const DEFAULT_DELAYS = [3, 8, 13, 20];
+const DEFAULT_DELAYS = [15, 8, 13, 20];
 
 function sanitizeSettings(s) {
   const raceEnabled = !!(s && s.raceEnabled);
