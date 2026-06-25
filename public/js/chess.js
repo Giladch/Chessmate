@@ -19,7 +19,7 @@ let myCooldownUntil = 0;
 let lastAnnounced = null;
 
 let settings = { raceEnabled: true, leadCap: 2, delaysSec: [15] };
-const DEFAULT_DELAYS = [15, 8, 13, 20];
+const DEFAULT_DELAYS = [15, 15, 15, 15];
 
 /* ── Material scoring ── */
 const PIECE_VALUE = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };

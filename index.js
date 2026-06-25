@@ -22,7 +22,7 @@ let settings = {
   leadCap: 2,
   delaysSec: [15],
 };
-const DEFAULT_DELAYS = [15, 8, 13, 20];
+const DEFAULT_DELAYS = [15, 15, 15, 15];
 
 function sanitizeSettings(s) {
   const raceEnabled = !!(s && s.raceEnabled);
