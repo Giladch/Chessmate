@@ -20,6 +20,7 @@ let cooldown = {
 let gameOver = null;
 let myCooldownUntil = 0;
 let lastAnnounced = null;
+let credit = { w: 0, b: 0 };
 
 let settings = { raceEnabled: true, leadCap: 2, delaysSec: [15] };
 const DEFAULT_DELAYS = [15, 15, 15, 15];
@@ -73,6 +74,9 @@ const renderBoard = () => {
     const sq = document.createElement("div");
     const parity = (((x + y) % 2) + 2) % 2;
     sq.classList.add("square", parity === 0 ? "light" : "dark");
+    if (boardData.zoneRows && boardData.zoneRows.indexOf(y) !== -1) {
+      sq.classList.add("zone");
+    }
     sq.dataset.x = x;
     sq.dataset.y = y;
     sq.style.gridColumnStart = (flip ? bb.maxX - x : x - bb.minX) + 1;
@@ -196,14 +200,13 @@ function updateScoreboard() {
     }
   });
 
-  setText("whitePoints", scoreWhite);
-  setText("blackPoints", scoreBlack);
+  // big number = spendable credit; small caption = captured material value
+  setText("whitePoints", credit.w);
+  setText("blackPoints", credit.b);
   renderCaptured("whiteCaptured", capturedByWhite, "cap-b");
   renderCaptured("blackCaptured", capturedByBlack, "cap-w");
-
-  const diff = scoreWhite - scoreBlack;
-  setText("whiteLead", diff > 0 ? `+${diff}` : "");
-  setText("blackLead", diff < 0 ? `+${-diff}` : "");
+  setText("whiteLead", scoreWhite ? "♟" + scoreWhite : "");
+  setText("blackLead", scoreBlack ? "♟" + scoreBlack : "");
 }
 
 function setText(id, value) {
@@ -352,6 +355,25 @@ function syncDashboard() {
   const capVal = document.getElementById("capVal");
   if (capVal) capVal.textContent = settings.leadCap;
 
+  const setIfFree = (id, val) => {
+    const el = document.getElementById(id);
+    if (el && document.activeElement !== el && val != null) el.value = val;
+  };
+  setIfFree("econStart", settings.startingCredit);
+  setIfFree("econSquare", settings.squareCost);
+  if (settings.pieceCost) {
+    document.querySelectorAll(".pc").forEach((inp) => {
+      if (document.activeElement !== inp && settings.pieceCost[inp.dataset.t] != null)
+        inp.value = settings.pieceCost[inp.dataset.t];
+    });
+  }
+  if (settings.zoneIncome) {
+    document.querySelectorAll(".zi").forEach((inp) => {
+      if (document.activeElement !== inp && settings.zoneIncome[inp.dataset.t] != null)
+        inp.value = settings.zoneIncome[inp.dataset.t];
+    });
+  }
+
   const dash = document.getElementById("dashboard");
   const lock = document.getElementById("dashLock");
   if (dash) dash.classList.toggle("dash-disabled", gameStarted);
@@ -368,7 +390,15 @@ function readDash() {
     if (isNaN(v)) v = DEFAULT_DELAYS[lvl - 1] || 8;
     delaysSec.push(v);
   }
-  return { raceEnabled, leadCap, delaysSec };
+  const pieceCost = {};
+  const zoneIncome = {};
+  document.querySelectorAll(".pc").forEach((inp) => (pieceCost[inp.dataset.t] = parseFloat(inp.value)));
+  document.querySelectorAll(".zi").forEach((inp) => (zoneIncome[inp.dataset.t] = parseFloat(inp.value)));
+  const startEl = document.getElementById("econStart");
+  const sqEl = document.getElementById("econSquare");
+  const startingCredit = startEl ? parseFloat(startEl.value) : settings.startingCredit;
+  const squareCost = sqEl ? parseFloat(sqEl.value) : settings.squareCost;
+  return { raceEnabled, leadCap, delaysSec, startingCredit, squareCost, pieceCost, zoneIncome };
 }
 
 function emitSettings() {
@@ -393,6 +423,9 @@ function wireDashboard() {
       capVal.textContent = v;
       emitSettings();
     });
+  document.querySelectorAll(".econInput").forEach((inp) =>
+    inp.addEventListener("change", emitSettings)
+  );
 }
 
 /**
@@ -548,6 +581,7 @@ socket.on("gameState", (s) => {
   gameStarted = !!s.started;
   cooldown = s.cooldown || cooldown;
   gameOver = s.gameOver || null;
+  if (s.credit) credit = s.credit;
   if (s.settings) settings = s.settings;
 
   if (myColor) {

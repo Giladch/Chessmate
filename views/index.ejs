@@ -530,6 +530,46 @@
             .dashboard { width: 480px; order: 2; }
         }
 
+        /* Orange income zone */
+        .square.zone {
+            box-shadow: inset 0 0 0 100px rgba(243, 156, 18, 0.20);
+        }
+
+        /* Economy inputs */
+        .econ-label {
+            font-size: 12px;
+            color: #9aa7b3;
+            margin-top: 2px;
+        }
+        .econInput {
+            width: 52px;
+            padding: 5px 6px;
+            border-radius: 8px;
+            border: 1px solid #34495e;
+            background: rgba(0, 0, 0, 0.25);
+            color: #fff;
+            font-size: 14px;
+            text-align: center;
+        }
+        .econ-grid {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+        .econ-cell {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2px;
+        }
+        .econ-cell label {
+            font-size: 16px;
+            color: #ecf0f1;
+        }
+        .econ-cell .econInput {
+            width: 42px;
+        }
+
     </style>
 </head>
 
@@ -554,6 +594,34 @@
                 </div>
             </div>
             <div id="delayRows"></div>
+        </div>
+
+        <div class="dash-section">
+            <div class="dash-row"><span class="dash-label" style="font-weight:bold;">💰 Economy</span></div>
+            <div class="dash-row">
+                <span class="dash-label">Starting credit</span>
+                <span><input type="number" id="econStart" class="econInput" min="0" max="9999"> <span class="delay-unit">₵</span></span>
+            </div>
+            <div class="dash-row">
+                <span class="dash-label">New square cost</span>
+                <span><input type="number" id="econSquare" class="econInput" min="0" max="999"> <span class="delay-unit">₵</span></span>
+            </div>
+            <div class="econ-label">Piece cost (₵)</div>
+            <div class="econ-grid">
+                <span class="econ-cell"><label>♟</label><input type="number" id="pc_p" class="econInput pc" data-t="p" min="0" max="999"></span>
+                <span class="econ-cell"><label>♞</label><input type="number" id="pc_n" class="econInput pc" data-t="n" min="0" max="999"></span>
+                <span class="econ-cell"><label>♝</label><input type="number" id="pc_b" class="econInput pc" data-t="b" min="0" max="999"></span>
+                <span class="econ-cell"><label>♜</label><input type="number" id="pc_r" class="econInput pc" data-t="r" min="0" max="999"></span>
+                <span class="econ-cell"><label>♛</label><input type="number" id="pc_q" class="econInput pc" data-t="q" min="0" max="999"></span>
+            </div>
+            <div class="econ-label">Zone income / turn (₵)</div>
+            <div class="econ-grid">
+                <span class="econ-cell"><label>♟</label><input type="number" id="zi_p" class="econInput zi" data-t="p" min="0" max="999"></span>
+                <span class="econ-cell"><label>♞</label><input type="number" id="zi_n" class="econInput zi" data-t="n" min="0" max="999"></span>
+                <span class="econ-cell"><label>♝</label><input type="number" id="zi_b" class="econInput zi" data-t="b" min="0" max="999"></span>
+                <span class="econ-cell"><label>♜</label><input type="number" id="zi_r" class="econInput zi" data-t="r" min="0" max="999"></span>
+                <span class="econ-cell"><label>♛</label><input type="number" id="zi_q" class="econInput zi" data-t="q" min="0" max="999"></span>
+            </div>
         </div>
 
         <div id="dashLock" class="dash-lock" style="display:none;">Game in progress — press Restart to change settings.</div>
@@ -601,7 +669,7 @@
     <!-- External Scripts -->
     <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"
         crossorigin="anonymous"></script>
-    <script src="/js/chess.js?v=7"></script>
+    <script src="/js/chess.js?v=8"></script>
 </body>
 
 </html>

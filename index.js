@@ -17,12 +17,28 @@ const io = socket(server);
  * chess. Standard chess legality is always preserved (no king capture); a game
  * ends by checkmate, stalemate/insufficient material, resignation or draw.
  */
+const MATERIAL = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+const PTYPES = ["p", "n", "b", "r", "q"];
+
 let settings = {
   raceEnabled: true,
   leadCap: 2,
   delaysSec: [15],
+  // economy
+  startingCredit: 0,
+  squareCost: 2,
+  pieceCost: { p: 1, n: 3, b: 3, r: 5, q: 9 },
+  zoneIncome: { p: 1, n: 2, b: 2, r: 3, q: 4 },
 };
 const DEFAULT_DELAYS = [15, 15, 15, 15];
+const DEFAULT_PIECE_COST = { p: 1, n: 3, b: 3, r: 5, q: 9 };
+const DEFAULT_ZONE_INCOME = { p: 1, n: 2, b: 2, r: 3, q: 4 };
+
+function clampNum(v, fallback, min, max) {
+  let n = parseFloat(v);
+  if (isNaN(n)) n = fallback;
+  return Math.max(min, Math.min(max, n));
+}
 
 function sanitizeSettings(s) {
   const raceEnabled = !!(s && s.raceEnabled);
@@ -37,7 +53,17 @@ function sanitizeSettings(s) {
     v = Math.max(0, Math.min(120, v));
     delaysSec.push(v);
   }
-  return { raceEnabled, leadCap, delaysSec };
+  const inPC = (s && s.pieceCost) || {};
+  const inZI = (s && s.zoneIncome) || {};
+  const pieceCost = {};
+  const zoneIncome = {};
+  PTYPES.forEach((t) => {
+    pieceCost[t] = clampNum(inPC[t], settings.pieceCost[t] != null ? settings.pieceCost[t] : DEFAULT_PIECE_COST[t], 0, 999);
+    zoneIncome[t] = clampNum(inZI[t], settings.zoneIncome[t] != null ? settings.zoneIncome[t] : DEFAULT_ZONE_INCOME[t], 0, 999);
+  });
+  const startingCredit = clampNum(s && s.startingCredit, settings.startingCredit || 0, 0, 9999);
+  const squareCost = clampNum(s && s.squareCost, settings.squareCost != null ? settings.squareCost : 2, 0, 999);
+  return { raceEnabled, leadCap, delaysSec, startingCredit, squareCost, pieceCost, zoneIncome };
 }
 
 function effectiveCap() {
@@ -57,6 +83,31 @@ let players = {};
 let moves = { w: 0, b: 0 };
 let lastMoveAt = { w: 0, b: 0 };
 let gameOver = null; // { winner: 'w'|'b'|null, reason }
+let credit = { w: 0, b: 0 }; // shared per-player points wallet
+
+// ── wallet API (used by capture/income now; squares/pieces in later phases) ──
+function canAfford(color, cost) {
+  return credit[color] >= cost;
+}
+function spend(color, cost) {
+  if (!canAfford(color, cost)) return false;
+  credit[color] -= cost;
+  return true;
+}
+function earn(color, amount) {
+  credit[color] += Math.max(0, amount || 0);
+}
+
+// Each move is a "turn tick": every piece standing in the central zone earns
+// its per-turn income for its owner.
+function awardZoneIncome() {
+  engine.pieces.forEach((p, k) => {
+    const ci = k.indexOf(",");
+    const x = parseInt(k.slice(0, ci), 10);
+    const y = parseInt(k.slice(ci + 1), 10);
+    if (engine.isInZone(x, y)) earn(p.color, settings.zoneIncome[p.type] || 0);
+  });
+}
 
 // Allow the same colour to move again (race mode) by forcing whose turn it is.
 function forceTurn(color) {
@@ -103,6 +154,7 @@ function buildState(lastMove) {
     check: safe(() => engine.inCheck(engine.turn), false),
     gameOver,
     started: moves.w + moves.b > 0,
+    credit: { w: credit.w, b: credit.b },
     settings,
   };
 }
@@ -116,6 +168,7 @@ function resetGame() {
   moves = { w: 0, b: 0 };
   lastMoveAt = { w: 0, b: 0 };
   gameOver = null;
+  credit = { w: settings.startingCredit || 0, b: settings.startingCredit || 0 };
 }
 
 // After `mover` plays, evaluate the opponent for checkmate / stalemate.
@@ -184,6 +237,8 @@ io.on("connection", (socket) => {
       }
       moves[c] += 1;
       lastMoveAt[c] = now;
+      if (result.captured) earn(c, MATERIAL[result.captured] || 0);
+      awardZoneIncome();
       finishOutcome(c);
       broadcastState({ from: result.from, to: result.to });
       return;
@@ -216,6 +271,8 @@ io.on("connection", (socket) => {
     }
     moves[c] += 1;
     lastMoveAt[c] = now;
+    if (result.captured) earn(c, MATERIAL[result.captured] || 0);
+    awardZoneIncome();
     finishOutcome(c);
     broadcastState({ from: result.from, to: result.to });
   });
