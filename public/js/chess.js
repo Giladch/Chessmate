@@ -52,8 +52,17 @@ const renderBoard = () => {
   const board = chess.board();
   boardElement.innerHTML = "";
 
-  board.forEach((row, rowIndex) => {
-    row.forEach((square, columnIndex) => {
+  // Black's perspective is produced by reversing the render order — NOT by a CSS
+  // rotation — so pieces are always upright (the native drag ghost of a rotated
+  // piece would otherwise appear upside-down).
+  const flip = myColor === "b";
+
+  for (let dr = 0; dr < 8; dr++) {
+    for (let dc = 0; dc < 8; dc++) {
+      const rowIndex = flip ? 7 - dr : dr;
+      const columnIndex = flip ? 7 - dc : dc;
+      const square = board[rowIndex][columnIndex];
+
       const squareElement = document.createElement("div");
       squareElement.classList.add(
         "square",
@@ -110,10 +119,10 @@ const renderBoard = () => {
       });
 
       boardElement.appendChild(squareElement);
-    });
-  });
+    }
+  }
 
-  boardElement.classList.toggle("flipped", myColor === "b");
+  boardElement.classList.remove("flipped");
   updateScoreboard();
 };
 
