@@ -33,17 +33,14 @@
             flex-wrap: wrap;
         }
 
-        /* Chessboard Container */
+        /* Chessboard Container (grid template + size set dynamically by JS) */
         .chessboard {
             display: grid;
-            grid-template-columns: repeat(8, 1fr);
-            grid-template-rows: repeat(8, 1fr);
             width: 480px;
             height: 480px;
             border-radius: 16px;
             border: 5px solid #34495e;
             box-shadow: 0px 10px 30px rgba(0, 0, 0, 0.5);
-            overflow: hidden;
             position: relative;
         }
 
@@ -604,8 +601,7 @@
     <!-- External Scripts -->
     <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"
         crossorigin="anonymous"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js" crossorigin="anonymous"></script>
-    <script src="/js/chess.js?v=6"></script>
+    <script src="/js/chess.js?v=7"></script>
 </body>
 
 </html>

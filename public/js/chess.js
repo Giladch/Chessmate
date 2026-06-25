@@ -1,11 +1,14 @@
 const socket = io();
-const chess = new Chess(); // render-only; loaded from server FEN
 const boardElement = document.getElementById("chessboard");
+const CELL = 60;
 
 let draggedPiece = null;
 let sourceSquare = null;
 let myColor = null; // 'w' | 'b' | null (spectator)
 let lastMove = null;
+
+let boardData = { cells: [], pieces: {}, bbox: { minX: 0, minY: 0, maxX: 7, maxY: 7 }, zoneRows: [3, 4] };
+let cellsSet = new Set();
 
 let gameMoves = { w: 0, b: 0 };
 let gameTurn = "w";
@@ -28,7 +31,7 @@ const CAPTURE_ORDER = ["q", "r", "b", "n", "p"];
 
 const otherColor = (c) => (c === "w" ? "b" : "w");
 const fmt = (ms) => (Math.max(0, ms) / 1000).toFixed(1);
-const effCap = () => (settings.raceEnabled ? settings.leadCap : 1);
+const cellKey = (x, y) => x + "," + y;
 
 function localRemaining() {
   if (!myColor) return 0;
@@ -46,87 +49,82 @@ function canIMove() {
 }
 
 /**
- * Render the board.
+ * Render the dynamic board: iterate existing cells and place each by its (x,y)
+ * via CSS-grid. Black perspective is produced by mirroring the placement
+ * arithmetic (NOT by CSS rotation), so pieces stay upright.
  */
 const renderBoard = () => {
-  const board = chess.board();
-  boardElement.innerHTML = "";
-
-  // Black's perspective is produced by reversing the render order — NOT by a CSS
-  // rotation — so pieces are always upright (the native drag ghost of a rotated
-  // piece would otherwise appear upside-down).
+  const bb = boardData.bbox;
+  const cols = bb.maxX - bb.minX + 1;
+  const rows = bb.maxY - bb.minY + 1;
   const flip = myColor === "b";
 
-  for (let dr = 0; dr < 8; dr++) {
-    for (let dc = 0; dc < 8; dc++) {
-      const rowIndex = flip ? 7 - dr : dr;
-      const columnIndex = flip ? 7 - dc : dc;
-      const square = board[rowIndex][columnIndex];
+  boardElement.innerHTML = "";
+  boardElement.style.gridTemplateColumns = `repeat(${cols}, ${CELL}px)`;
+  boardElement.style.gridTemplateRows = `repeat(${rows}, ${CELL}px)`;
+  boardElement.style.width = cols * CELL + "px";
+  boardElement.style.height = rows * CELL + "px";
 
-      const squareElement = document.createElement("div");
-      squareElement.classList.add(
-        "square",
-        (rowIndex + columnIndex) % 2 === 0 ? "light" : "dark"
-      );
-      squareElement.dataset.row = rowIndex;
-      squareElement.dataset.column = columnIndex;
+  boardData.cells.forEach((k) => {
+    const ci = k.indexOf(",");
+    const x = parseInt(k.slice(0, ci), 10);
+    const y = parseInt(k.slice(ci + 1), 10);
 
-      if (
-        lastMove &&
-        ((lastMove.from.row === rowIndex &&
-          lastMove.from.column === columnIndex) ||
-          (lastMove.to.row === rowIndex && lastMove.to.column === columnIndex))
-      ) {
-        squareElement.classList.add("highlight");
-      }
+    const sq = document.createElement("div");
+    const parity = (((x + y) % 2) + 2) % 2;
+    sq.classList.add("square", parity === 0 ? "light" : "dark");
+    sq.dataset.x = x;
+    sq.dataset.y = y;
+    sq.style.gridColumnStart = (flip ? bb.maxX - x : x - bb.minX) + 1;
+    sq.style.gridRowStart = (flip ? bb.maxY - y : y - bb.minY) + 1;
 
-      if (square) {
-        const pieceElement = document.createElement("div");
-        pieceElement.classList.add(
-          "piece",
-          square.color === "w" ? "white" : "black"
-        );
-        pieceElement.innerText = getPieceUnicode(square);
-        pieceElement.draggable = myColor === square.color && !gameOver;
-
-        pieceElement.addEventListener("dragstart", (event) => {
-          draggedPiece = pieceElement;
-          sourceSquare = { row: rowIndex, column: columnIndex };
-          event.dataTransfer.setData("text/plain", "");
-          pieceElement.classList.add("dragging");
-        });
-
-        pieceElement.addEventListener("dragend", () => {
-          draggedPiece = null;
-          sourceSquare = null;
-          pieceElement.classList.remove("dragging");
-        });
-
-        squareElement.appendChild(pieceElement);
-      }
-
-      squareElement.addEventListener("dragover", (event) =>
-        event.preventDefault()
-      );
-      squareElement.addEventListener("drop", (event) => {
-        event.preventDefault();
-        if (draggedPiece) {
-          handleMove(sourceSquare, {
-            row: parseInt(squareElement.dataset.row),
-            column: parseInt(squareElement.dataset.column),
-          });
-        }
-      });
-
-      boardElement.appendChild(squareElement);
+    if (
+      lastMove &&
+      ((lastMove.from.x === x && lastMove.from.y === y) ||
+        (lastMove.to.x === x && lastMove.to.y === y))
+    ) {
+      sq.classList.add("highlight");
     }
-  }
 
-  boardElement.classList.remove("flipped");
+    const p = boardData.pieces[k];
+    if (p) {
+      const pieceEl = document.createElement("div");
+      pieceEl.classList.add("piece", p.c === "w" ? "white" : "black");
+      pieceEl.innerText = getPieceUnicode({ type: p.t });
+      pieceEl.draggable = myColor === p.c && !gameOver;
+
+      pieceEl.addEventListener("dragstart", (event) => {
+        draggedPiece = pieceEl;
+        sourceSquare = { x, y };
+        event.dataTransfer.setData("text/plain", "");
+        pieceEl.classList.add("dragging");
+      });
+      pieceEl.addEventListener("dragend", () => {
+        draggedPiece = null;
+        sourceSquare = null;
+        pieceEl.classList.remove("dragging");
+      });
+      sq.appendChild(pieceEl);
+    }
+
+    sq.addEventListener("dragover", (event) => event.preventDefault());
+    sq.addEventListener("drop", (event) => {
+      event.preventDefault();
+      if (draggedPiece) {
+        handleMove(sourceSquare, {
+          x: parseInt(sq.dataset.x, 10),
+          y: parseInt(sq.dataset.y, 10),
+        });
+      }
+    });
+
+    boardElement.appendChild(sq);
+  });
+
   updateScoreboard();
 };
 
-const handleMove = (fromSquare, toSquare) => {
+const handleMove = (from, to) => {
   if (!canIMove()) {
     if (!myColor || gameOver) return;
     if (!settings.raceEnabled) {
@@ -147,19 +145,19 @@ const handleMove = (fromSquare, toSquare) => {
     return;
   }
 
-  const from = `${String.fromCharCode(97 + fromSquare.column)}${
-    8 - fromSquare.row
-  }`;
-  const to = `${String.fromCharCode(97 + toSquare.column)}${8 - toSquare.row}`;
-  const piece = chess.get(from);
-  const move = { from, to };
+  const move = { from: { x: from.x, y: from.y }, to: { x: to.x, y: to.y } };
+  const p = boardData.pieces[cellKey(from.x, from.y)];
 
-  if (piece && piece.type === "p" && (to.endsWith("8") || to.endsWith("1"))) {
-    showPromotionUI((selectedPiece) => {
-      move.promotion = selectedPiece;
-      socket.emit("move", move);
-    });
-    return;
+  if (p && p.t === "p") {
+    const f = myColor === "w" ? -1 : 1;
+    if (!cellsSet.has(cellKey(to.x, to.y + f))) {
+      // pawn reaching the forward edge → promotion
+      showPromotionUI((selectedPiece) => {
+        move.promotion = selectedPiece;
+        socket.emit("move", move);
+      });
+      return;
+    }
   }
 
   socket.emit("move", move);
@@ -171,15 +169,14 @@ const getPieceUnicode = (piece) => {
 };
 
 /**
- * Scoreboard — captured-material points per player.
+ * Scoreboard — captured-material points per player (from the board pieces).
  */
 function updateScoreboard() {
   const cur = { w: {}, b: {} };
-  chess.board().forEach((row) =>
-    row.forEach((sq) => {
-      if (sq) cur[sq.color][sq.type] = (cur[sq.color][sq.type] || 0) + 1;
-    })
-  );
+  Object.keys(boardData.pieces).forEach((k) => {
+    const p = boardData.pieces[k];
+    cur[p.c][p.t] = (cur[p.c][p.t] || 0) + 1;
+  });
 
   let scoreWhite = 0;
   let scoreBlack = 0;
@@ -534,16 +531,15 @@ socket.on("spectator", () => {
 });
 
 socket.on("gameState", (s) => {
-  try {
-    chess.load(s.fen);
-  } catch (e) {
-    console.error("Bad FEN from server", e);
+  if (s.board) {
+    boardData = s.board;
+    cellsSet = new Set(s.board.cells);
   }
 
   lastMove = s.lastMove
     ? {
-        from: { row: s.lastMove.from.row, column: s.lastMove.from.col },
-        to: { row: s.lastMove.to.row, column: s.lastMove.to.col },
+        from: { x: s.lastMove.from.x, y: s.lastMove.from.y },
+        to: { x: s.lastMove.to.x, y: s.lastMove.to.y },
       }
     : null;
 
@@ -575,7 +571,7 @@ socket.on("moveRejected", (d) => {
 
 socket.on("settingsRejected", (d) => {
   if (d && d.reason) showMessage(d.reason, "error");
-  dashSig = ""; // force rebuild back to authoritative settings
+  dashSig = "";
   syncDashboard();
 });
 

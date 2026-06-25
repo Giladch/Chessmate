@@ -1,7 +1,7 @@
 const express = require("express");
 const socket = require("socket.io");
 const http = require("http");
-const { Chess } = require("chess.js");
+const { standardSetup } = require("./engine");
 
 const app = express();
 const server = http.createServer(app);
@@ -52,18 +52,15 @@ function delayForLead(lead) {
   return (sec != null ? sec : 8) * 1000;
 }
 
-const chess = new Chess();
+let engine = standardSetup();
 let players = {};
 let moves = { w: 0, b: 0 };
 let lastMoveAt = { w: 0, b: 0 };
 let gameOver = null; // { winner: 'w'|'b'|null, reason }
 
-// Flip the side-to-move in the FEN so the same colour can move again (race mode).
+// Allow the same colour to move again (race mode) by forcing whose turn it is.
 function forceTurn(color) {
-  const parts = chess.fen().split(" ");
-  parts[1] = color;
-  parts[3] = "-";
-  chess.load(parts.join(" "));
+  engine.setTurn(color);
 }
 
 function colorOf(socketId) {
@@ -98,12 +95,12 @@ function cooldownState(now) {
 
 function buildState(lastMove) {
   return {
-    fen: chess.fen(),
+    board: engine.serialize(),
     lastMove: lastMove || null,
     moves: { w: moves.w, b: moves.b },
-    turn: safe(() => chess.turn(), "w"),
+    turn: engine.turn,
     cooldown: cooldownState(Date.now()),
-    check: safe(() => chess.isCheck(), false),
+    check: safe(() => engine.inCheck(engine.turn), false),
     gameOver,
     started: moves.w + moves.b > 0,
     settings,
@@ -115,23 +112,18 @@ function broadcastState(lastMove) {
 }
 
 function resetGame() {
-  chess.reset();
+  engine = standardSetup();
   moves = { w: 0, b: 0 };
   lastMoveAt = { w: 0, b: 0 };
   gameOver = null;
 }
 
-function squareToRC(sq) {
-  return { col: sq.charCodeAt(0) - 97, row: 8 - parseInt(sq[1]) };
-}
-
+// After `mover` plays, evaluate the opponent for checkmate / stalemate.
 function finishOutcome(mover) {
-  if (safe(() => chess.isCheckmate(), false)) {
+  const opp = mover === "w" ? "b" : "w";
+  if (safe(() => engine.isCheckmate(opp), false)) {
     gameOver = { winner: mover, reason: "checkmate" };
-  } else if (
-    safe(() => chess.isStalemate(), false) ||
-    safe(() => chess.isInsufficientMaterial(), false)
-  ) {
+  } else if (safe(() => engine.isStalemate(opp), false)) {
     gameOver = { winner: null, reason: "draw" };
   }
 }
@@ -181,16 +173,11 @@ io.on("connection", (socket) => {
 
     if (!settings.raceEnabled) {
       // Classic alternating chess.
-      if (safe(() => chess.turn(), "w") !== c) {
+      if (engine.turn !== c) {
         socket.emit("moveRejected", { reason: "Not your turn" });
         return;
       }
-      let result = null;
-      try {
-        result = chess.move(move);
-      } catch (e) {
-        result = null;
-      }
+      const result = engine.move(move, c);
       if (!result) {
         socket.emit("moveRejected", { reason: "Illegal move" });
         return;
@@ -198,7 +185,7 @@ io.on("connection", (socket) => {
       moves[c] += 1;
       lastMoveAt[c] = now;
       finishOutcome(c);
-      broadcastState({ from: squareToRC(result.from), to: squareToRC(result.to) });
+      broadcastState({ from: result.from, to: result.to });
       return;
     }
 
@@ -222,12 +209,7 @@ io.on("connection", (socket) => {
     }
 
     forceTurn(c);
-    let result = null;
-    try {
-      result = chess.move(move);
-    } catch (e) {
-      result = null;
-    }
+    const result = engine.move(move, c);
     if (!result) {
       socket.emit("moveRejected", { reason: "Illegal move" });
       return;
@@ -235,7 +217,7 @@ io.on("connection", (socket) => {
     moves[c] += 1;
     lastMoveAt[c] = now;
     finishOutcome(c);
-    broadcastState({ from: squareToRC(result.from), to: squareToRC(result.to) });
+    broadcastState({ from: result.from, to: result.to });
   });
 
   socket.on("restartGame", () => {

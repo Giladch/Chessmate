@@ -10,6 +10,7 @@ RUN npm ci --omit=dev
 
 # App source
 COPY index.js ./
+COPY engine.js ./
 COPY views ./views
 COPY public ./public
 
