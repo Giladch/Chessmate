@@ -173,6 +173,147 @@ const handleBuild = (x, y) => {
   socket.emit("buildSquare", { x, y });
 };
 
+/* ── Buy pieces: right-click long-press radial menu ── */
+const RADIAL_SYM = { q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
+
+function classifyHomeClient(x, y, color) {
+  if (color === "w") {
+    if (y >= 7) return "all";
+    if (y === 6) return "pawn";
+    return "none";
+  }
+  if (y <= 0) return "all";
+  if (y === 1) return "pawn";
+  return "none";
+}
+
+let radialLayer = null;
+function closeRadial() {
+  if (radialLayer) {
+    radialLayer.remove();
+    radialLayer = null;
+  }
+}
+
+function openRadial(x, y) {
+  closeRadial();
+  if (!myColor || gameOver) return;
+  const key = cellKey(x, y);
+  if (!cellsSet.has(key) || boardData.pieces[key]) return;
+  const tier = classifyHomeClient(x, y, myColor);
+  if (tier === "none") return;
+  const types = tier === "pawn" ? ["p"] : ["q", "r", "b", "n", "p"];
+
+  const sqEl = boardElement.querySelector(`.square[data-x="${x}"][data-y="${y}"]`);
+  if (!sqEl) return;
+  const rect = sqEl.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+
+  const layer = document.createElement("div");
+  layer.className = "radial-capture";
+  const menu = document.createElement("div");
+  menu.className = "radial-menu";
+  menu.style.left = cx + "px";
+  menu.style.top = cy + "px";
+
+  const opts = [];
+  const n = types.length;
+  types.forEach((t, i) => {
+    const ang = -Math.PI / 2 + i * ((2 * Math.PI) / n);
+    const R = n === 1 ? 0 : 64;
+    const ox = Math.cos(ang) * R;
+    const oy = Math.sin(ang) * R;
+    const cost = (settings.pieceCost && settings.pieceCost[t]) || 0;
+    const affordable = credit[myColor] >= cost;
+    const el = document.createElement("div");
+    el.className = "radial-option" + (affordable ? "" : " disabled");
+    el.style.left = ox + "px";
+    el.style.top = oy + "px";
+    el.dataset.t = t;
+    el.innerHTML =
+      `<span class="ro-glyph ${myColor === "w" ? "ro-w" : "ro-b"}">${RADIAL_SYM[t]}</span>` +
+      `<span class="ro-cost">${cost}₵</span>`;
+    el.addEventListener("click", () => {
+      if (affordable) socket.emit("buyPiece", { x, y, type: t });
+      else showMessage("Not enough credit for that piece.", "error");
+      closeRadial();
+    });
+    menu.appendChild(el);
+    opts.push({ el, t, ox, oy, affordable });
+  });
+
+  layer.appendChild(menu);
+  layer.addEventListener("mousemove", (e) => {
+    let best = null;
+    let bestd = Infinity;
+    opts.forEach((o) => {
+      o.el.classList.remove("hover");
+      const dx = e.clientX - (cx + o.ox);
+      const dy = e.clientY - (cy + o.oy);
+      const d = dx * dx + dy * dy;
+      if (d < bestd) {
+        bestd = d;
+        best = o;
+      }
+    });
+    if (best && bestd < 60 * 60) best.el.classList.add("hover");
+  });
+  layer.addEventListener("mouseup", (e) => {
+    if (e.button !== 2) return;
+    const hovered = menu.querySelector(".radial-option.hover");
+    if (hovered) {
+      const t = hovered.dataset.t;
+      const cost = (settings.pieceCost && settings.pieceCost[t]) || 0;
+      if (credit[myColor] >= cost) socket.emit("buyPiece", { x, y, type: t });
+      else showMessage("Not enough credit for that piece.", "error");
+    }
+    closeRadial();
+  });
+  layer.addEventListener("mousedown", (e) => {
+    if (e.target === layer) closeRadial();
+  });
+  layer.addEventListener("contextmenu", (e) => e.preventDefault());
+  document.body.appendChild(layer);
+  radialLayer = layer;
+}
+
+function wireBuyMenu() {
+  let pressTimer = null;
+  let pressCell = null;
+  boardElement.addEventListener("contextmenu", (e) => e.preventDefault());
+  boardElement.addEventListener("mousedown", (e) => {
+    if (e.button !== 2) return;
+    const sq = e.target.closest(".square");
+    if (!sq || sq.classList.contains("buildable")) return;
+    const x = parseInt(sq.dataset.x, 10);
+    const y = parseInt(sq.dataset.y, 10);
+    if (isNaN(x) || isNaN(y)) return;
+    pressCell = { x, y };
+    pressTimer = setTimeout(() => {
+      pressTimer = null;
+      openRadial(x, y);
+    }, 300);
+  });
+  boardElement.addEventListener("mouseup", (e) => {
+    if (e.button !== 2) return;
+    if (pressTimer) {
+      clearTimeout(pressTimer);
+      pressTimer = null;
+      if (pressCell) openRadial(pressCell.x, pressCell.y); // quick right-click also opens
+    }
+  });
+  boardElement.addEventListener("mouseleave", () => {
+    if (pressTimer) {
+      clearTimeout(pressTimer);
+      pressTimer = null;
+    }
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeRadial();
+  });
+}
+
 const handleMove = (from, to) => {
   if (!canIMove()) {
     if (!myColor || gameOver) return;
@@ -675,6 +816,10 @@ socket.on("buildRejected", (d) => {
   if (d && d.reason) showMessage(d.reason, "error");
 });
 
+socket.on("buyRejected", (d) => {
+  if (d && d.reason) showMessage(d.reason, "error");
+});
+
 function announceGameOver() {
   if (!gameOver) {
     lastAnnounced = null;
@@ -708,6 +853,7 @@ function announceGameOver() {
  * Init.
  */
 wireDashboard();
+wireBuyMenu();
 buildDashboard();
 renderBoard();
 updateRaceUI();

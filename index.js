@@ -303,6 +303,52 @@ io.on("connection", (socket) => {
     broadcastState(null);
   });
 
+  socket.on("buyPiece", (req) => {
+    const c = colorOf(socket.id);
+    if (!c) return;
+    if (gameOver) {
+      socket.emit("buyRejected", { reason: "Game over" });
+      return;
+    }
+    const x = parseInt(req && req.x, 10);
+    const y = parseInt(req && req.y, 10);
+    const type = req && req.type;
+    if (!Number.isInteger(x) || !Number.isInteger(y) || PTYPES.indexOf(type) === -1) {
+      socket.emit("buyRejected", { reason: "Bad request" });
+      return;
+    }
+    if (!engine.hasCell(x, y)) {
+      socket.emit("buyRejected", { reason: "No such square" });
+      return;
+    }
+    if (engine.getPiece(x, y)) {
+      socket.emit("buyRejected", { reason: "Square occupied" });
+      return;
+    }
+    const tier = engine.classifyHome(x, y, c);
+    if (tier === "none") {
+      socket.emit("buyRejected", { reason: "Not your home area" });
+      return;
+    }
+    if (tier === "pawn" && type !== "p") {
+      socket.emit("buyRejected", { reason: "Only pawns on the second row" });
+      return;
+    }
+    const cost = (settings.pieceCost && settings.pieceCost[type]) || 0;
+    if (!canAfford(c, cost)) {
+      socket.emit("buyRejected", { reason: "Not enough credit" });
+      return;
+    }
+    const placed = engine.placePiece(x, y, type, c);
+    if (!placed.ok) {
+      socket.emit("buyRejected", { reason: "Cannot place there" });
+      return;
+    }
+    spend(c, cost);
+    finishOutcome(c); // a bought piece may deliver check/mate
+    broadcastState(null);
+  });
+
   socket.on("restartGame", () => {
     resetGame();
     broadcastState(null);

@@ -553,6 +553,55 @@
             background: rgba(231, 76, 60, 0.18);
         }
 
+        /* Buy-pieces radial menu */
+        .radial-capture {
+            position: fixed;
+            inset: 0;
+            z-index: 1100;
+        }
+        .radial-menu {
+            position: fixed;
+            transform: translate(-50%, -50%);
+            z-index: 1101;
+        }
+        .radial-option {
+            position: absolute;
+            transform: translate(-50%, -50%);
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            background: #2c3e50;
+            border: 2px solid #34495e;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: transform 0.1s, border-color 0.1s;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
+        }
+        .radial-option .ro-glyph {
+            font-size: 22px;
+            line-height: 1;
+        }
+        .radial-option .ro-glyph.ro-w { color: #fff; text-shadow: 0 0 2px #000; }
+        .radial-option .ro-glyph.ro-b { color: #111; text-shadow: 0 0 2px #fff; }
+        .radial-option .ro-cost {
+            font-size: 10px;
+            color: #f1c40f;
+        }
+        .radial-option.hover {
+            border-color: #2ecc71;
+            transform: translate(-50%, -50%) scale(1.18);
+        }
+        .radial-option.disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+        .radial-option.disabled.hover {
+            border-color: #e74c3c;
+        }
+
         /* Economy inputs */
         .econ-label {
             font-size: 12px;
@@ -687,7 +736,7 @@
     <!-- External Scripts -->
     <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"
         crossorigin="anonymous"></script>
-    <script src="/js/chess.js?v=9"></script>
+    <script src="/js/chess.js?v=10"></script>
 </body>
 
 </html>
