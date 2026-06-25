@@ -54,11 +54,27 @@ function canIMove() {
  * via CSS-grid. Black perspective is produced by mirroring the placement
  * arithmetic (NOT by CSS rotation), so pieces stay upright.
  */
+function isBuildableClient(x, y) {
+  if (cellsSet.has(cellKey(x, y))) return false;
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      if (dx === 0 && dy === 0) continue;
+      if (cellsSet.has(cellKey(x + dx, y + dy))) return true;
+    }
+  }
+  return false;
+}
+
 const renderBoard = () => {
   const bb = boardData.bbox;
-  const cols = bb.maxX - bb.minX + 1;
-  const rows = bb.maxY - bb.minY + 1;
+  // expand by a 1-cell ring so buildable candidate cells around the board show
+  const rMinX = bb.minX - 1, rMaxX = bb.maxX + 1;
+  const rMinY = bb.minY - 1, rMaxY = bb.maxY + 1;
+  const cols = rMaxX - rMinX + 1;
+  const rows = rMaxY - rMinY + 1;
   const flip = myColor === "b";
+  const colOf = (x) => (flip ? rMaxX - x : x - rMinX) + 1;
+  const rowOf = (y) => (flip ? rMaxY - y : y - rMinY) + 1;
 
   boardElement.innerHTML = "";
   boardElement.style.gridTemplateColumns = `repeat(${cols}, ${CELL}px)`;
@@ -66,6 +82,7 @@ const renderBoard = () => {
   boardElement.style.width = cols * CELL + "px";
   boardElement.style.height = rows * CELL + "px";
 
+  // existing cells
   boardData.cells.forEach((k) => {
     const ci = k.indexOf(",");
     const x = parseInt(k.slice(0, ci), 10);
@@ -79,8 +96,8 @@ const renderBoard = () => {
     }
     sq.dataset.x = x;
     sq.dataset.y = y;
-    sq.style.gridColumnStart = (flip ? bb.maxX - x : x - bb.minX) + 1;
-    sq.style.gridRowStart = (flip ? bb.maxY - y : y - bb.minY) + 1;
+    sq.style.gridColumnStart = colOf(x);
+    sq.style.gridRowStart = rowOf(y);
 
     if (
       lastMove &&
@@ -125,7 +142,35 @@ const renderBoard = () => {
     boardElement.appendChild(sq);
   });
 
+  // buildable candidate cells (only for seated players, game live)
+  if (myColor && !gameOver) {
+    const affordable = credit[myColor] >= (settings.squareCost || 0);
+    for (let y = rMinY; y <= rMaxY; y++) {
+      for (let x = rMinX; x <= rMaxX; x++) {
+        if (!isBuildableClient(x, y)) continue;
+        const cand = document.createElement("div");
+        cand.className = "square buildable" + (affordable ? "" : " bad");
+        cand.dataset.bx = x;
+        cand.dataset.by = y;
+        cand.style.gridColumnStart = colOf(x);
+        cand.style.gridRowStart = rowOf(y);
+        cand.title = `Build square (${settings.squareCost || 0}₵)`;
+        cand.addEventListener("click", () => handleBuild(x, y));
+        boardElement.appendChild(cand);
+      }
+    }
+  }
+
   updateScoreboard();
+};
+
+const handleBuild = (x, y) => {
+  if (!myColor || gameOver) return;
+  if (credit[myColor] < (settings.squareCost || 0)) {
+    showMessage("Not enough credit for a new square.", "error");
+    return;
+  }
+  socket.emit("buildSquare", { x, y });
 };
 
 const handleMove = (from, to) => {
@@ -625,6 +670,10 @@ socket.on("offerDraw", () => {
 });
 
 socket.on("drawRejected", () => showMessage("Draw offer rejected.", "draw"));
+
+socket.on("buildRejected", (d) => {
+  if (d && d.reason) showMessage(d.reason, "error");
+});
 
 function announceGameOver() {
   if (!gameOver) {

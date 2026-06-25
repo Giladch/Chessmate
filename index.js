@@ -277,6 +277,32 @@ io.on("connection", (socket) => {
     broadcastState({ from: result.from, to: result.to });
   });
 
+  socket.on("buildSquare", (pos) => {
+    const c = colorOf(socket.id);
+    if (!c) return;
+    if (gameOver) {
+      socket.emit("buildRejected", { reason: "Game over" });
+      return;
+    }
+    const x = parseInt(pos && pos.x, 10);
+    const y = parseInt(pos && pos.y, 10);
+    if (!Number.isInteger(x) || !Number.isInteger(y)) {
+      socket.emit("buildRejected", { reason: "Bad request" });
+      return;
+    }
+    if (!engine.isBuildable(x, y)) {
+      socket.emit("buildRejected", { reason: "Can't build there" });
+      return;
+    }
+    const cost = settings.squareCost || 0;
+    if (!spend(c, cost)) {
+      socket.emit("buildRejected", { reason: "Not enough credit" });
+      return;
+    }
+    engine.addCell(x, y);
+    broadcastState(null);
+  });
+
   socket.on("restartGame", () => {
     resetGame();
     broadcastState(null);
