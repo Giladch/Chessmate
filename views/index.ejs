@@ -14,11 +14,23 @@
         body {
             background: linear-gradient(135deg, #1e1e2f, #252542);
             display: flex;
-            align-items: center;
+            align-items: flex-start;
             justify-content: center;
-            height: 100vh;
+            min-height: 100vh;
+            margin: 0;
+            padding: 28px 16px;
+            box-sizing: border-box;
             color: white;
             font-family: 'Poppins', sans-serif;
+        }
+
+        /* Two-column layout: dashboard (left) + game (right) */
+        .layout {
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+            gap: 22px;
+            flex-wrap: wrap;
         }
 
         /* Chessboard Container */
@@ -382,10 +394,173 @@
             line-height: 1.5;
         }
 
+        /* Settings dashboard */
+        .dashboard {
+            width: 264px;
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid #34495e;
+            border-radius: 16px;
+            padding: 18px 18px 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+            box-sizing: border-box;
+        }
+        .dash-title {
+            font-size: 20px;
+            font-weight: bold;
+            color: #ecf0f1;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .dash-sub {
+            font-size: 12px;
+            color: #9aa7b3;
+            margin-top: -8px;
+            line-height: 1.5;
+        }
+        .dash-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+        .dash-label {
+            font-size: 14px;
+            color: #ecf0f1;
+        }
+        .dash-section {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+            padding-top: 14px;
+        }
+        .switch {
+            position: relative;
+            width: 52px;
+            height: 28px;
+            flex: none;
+        }
+        .switch input {
+            display: none;
+        }
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            inset: 0;
+            background: #555;
+            border-radius: 28px;
+            transition: 0.2s;
+        }
+        .slider::before {
+            content: "";
+            position: absolute;
+            height: 22px;
+            width: 22px;
+            left: 3px;
+            top: 3px;
+            background: #fff;
+            border-radius: 50%;
+            transition: 0.2s;
+        }
+        .switch input:checked + .slider {
+            background: #2ecc71;
+        }
+        .switch input:checked + .slider::before {
+            transform: translateX(24px);
+        }
+        .stepper {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .stepper button {
+            width: 30px;
+            height: 30px;
+            border: none;
+            border-radius: 8px;
+            background: #34495e;
+            color: #fff;
+            font-size: 18px;
+            line-height: 1;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        .stepper button:hover {
+            background: #3d5a73;
+        }
+        .stepper .val {
+            min-width: 26px;
+            text-align: center;
+            font-size: 18px;
+            font-weight: bold;
+            color: #f1c40f;
+        }
+        .delay-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+        .delay-row input {
+            width: 64px;
+            padding: 6px 8px;
+            border-radius: 8px;
+            border: 1px solid #34495e;
+            background: rgba(0, 0, 0, 0.25);
+            color: #fff;
+            font-size: 14px;
+            text-align: center;
+        }
+        .delay-unit {
+            font-size: 13px;
+            color: #9aa7b3;
+            margin-left: 4px;
+        }
+        .dash-lock {
+            font-size: 12px;
+            color: #e67e22;
+            line-height: 1.5;
+        }
+        .dash-disabled {
+            opacity: 0.45;
+            pointer-events: none;
+        }
+        @media (max-width: 820px) {
+            .dashboard { width: 480px; order: 2; }
+        }
+
     </style>
 </head>
 
 <body>
+    <div class="layout">
+    <div id="dashboard" class="dashboard">
+        <div class="dash-title">⚙️ Game Settings</div>
+        <div class="dash-sub">Shared by both players · change before the game starts</div>
+
+        <div class="dash-row">
+            <span class="dash-label">Race mode</span>
+            <label class="switch"><input type="checkbox" id="raceToggle"><span class="slider"></span></label>
+        </div>
+
+        <div id="raceOptions" class="dash-section">
+            <div class="dash-row">
+                <span class="dash-label">Max moves ahead</span>
+                <div class="stepper">
+                    <button id="capMinus" type="button">−</button>
+                    <span id="capVal" class="val">3</span>
+                    <button id="capPlus" type="button">+</button>
+                </div>
+            </div>
+            <div id="delayRows"></div>
+        </div>
+
+        <div id="dashLock" class="dash-lock" style="display:none;">Game in progress — press Restart to change settings.</div>
+    </div>
     <div class="flex flex-col items-center">
         <div class="title">♜ Chessmate ♞</div>
         <div id="scoreboard" class="scoreboard">
@@ -420,17 +595,17 @@
             <div id="raceStatus" class="race-status">Connecting…</div>
             <div class="cooldown-track"><div id="cooldownBar" class="cooldown-fill"></div></div>
         </div>
-        <div class="race-rules">
-            Race chess: get up to 3 moves ahead of your opponent. Leading costs time —
-            wait 3s at +1, 8s at +2, blocked at +3. White moves first.
+        <div id="raceRules" class="race-rules">
+            Race chess: get up to 3 moves ahead of your opponent. Leading costs time.
         </div>
+    </div>
     </div>
 
     <!-- External Scripts -->
     <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"
         crossorigin="anonymous"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js" crossorigin="anonymous"></script>
-    <script src="/js/chess.js?v=2"></script>
+    <script src="/js/chess.js?v=3"></script>
 </body>
 
 </html>

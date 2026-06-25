@@ -1,5 +1,5 @@
 const socket = io();
-const chess = new Chess(); // used only to render the position the server sends
+const chess = new Chess(); // render-only; loaded from server FEN
 const boardElement = document.getElementById("chessboard");
 
 let draggedPiece = null;
@@ -8,21 +8,27 @@ let myColor = null; // 'w' | 'b' | null (spectator)
 let lastMove = null;
 
 let gameMoves = { w: 0, b: 0 };
+let gameTurn = "w";
+let gameStarted = false;
 let cooldown = {
   w: { lead: 0, blocked: false, remainingMs: 0 },
   b: { lead: 0, blocked: false, remainingMs: 0 },
 };
 let gameOver = null;
-let myCooldownUntil = 0; // local timestamp (ms) until which I cannot move
-let lastAnnounced = null; // avoid repeating the game-over banner
+let myCooldownUntil = 0;
+let lastAnnounced = null;
 
-/* ── Material scoring values ── */
+let settings = { raceEnabled: true, leadCap: 3, delaysSec: [3, 8] };
+const DEFAULT_DELAYS = [3, 8, 13, 20];
+
+/* ── Material scoring ── */
 const PIECE_VALUE = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
 const START_COUNT = { p: 8, n: 2, b: 2, r: 2, q: 1 };
 const CAPTURE_ORDER = ["q", "r", "b", "n", "p"];
 
 const otherColor = (c) => (c === "w" ? "b" : "w");
 const fmt = (ms) => (Math.max(0, ms) / 1000).toFixed(1);
+const effCap = () => (settings.raceEnabled ? settings.leadCap : 1);
 
 function localRemaining() {
   if (!myColor) return 0;
@@ -31,15 +37,16 @@ function localRemaining() {
 
 function canIMove() {
   if (!myColor || gameOver) return false;
+  if (!settings.raceEnabled) return gameTurn === myColor;
   if (gameMoves.w + gameMoves.b === 0 && myColor !== "w") return false;
   const lead = gameMoves[myColor] - gameMoves[otherColor(myColor)];
-  if (lead >= 3) return false;
+  if (lead >= settings.leadCap) return false;
   if (localRemaining() > 0) return false;
   return true;
 }
 
 /**
- * Render the chessboard from the current position.
+ * Render the board.
  */
 const renderBoard = () => {
   const board = chess.board();
@@ -110,18 +117,21 @@ const renderBoard = () => {
   updateScoreboard();
 };
 
-/**
- * Attempt a move — gated client-side by the race rules, then sent to the server
- * (which is authoritative and re-checks everything).
- */
 const handleMove = (fromSquare, toSquare) => {
   if (!canIMove()) {
     if (!myColor || gameOver) return;
+    if (!settings.raceEnabled) {
+      showMessage("Not your turn.", "error");
+      return;
+    }
     const lead = gameMoves[myColor] - gameMoves[otherColor(myColor)];
     if (gameMoves.w + gameMoves.b === 0 && myColor !== "w") {
       showMessage("White starts the game.", "error");
-    } else if (lead >= 3) {
-      showMessage("You're 3 moves ahead — wait for your opponent.", "error");
+    } else if (lead >= settings.leadCap) {
+      showMessage(
+        `You're ${settings.leadCap} moves ahead — wait for your opponent.`,
+        "error"
+      );
     } else if (localRemaining() > 0) {
       showMessage(`On cooldown: ${fmt(localRemaining())}s`, "error");
     }
@@ -133,7 +143,6 @@ const handleMove = (fromSquare, toSquare) => {
   }`;
   const to = `${String.fromCharCode(97 + toSquare.column)}${8 - toSquare.row}`;
   const piece = chess.get(from);
-
   const move = { from, to };
 
   if (piece && piece.type === "p" && (to.endsWith("8") || to.endsWith("1"))) {
@@ -147,23 +156,13 @@ const handleMove = (fromSquare, toSquare) => {
   socket.emit("move", move);
 };
 
-/**
- * Convert piece notation to Unicode.
- */
 const getPieceUnicode = (piece) => {
-  const unicodeMap = {
-    p: "♙",
-    r: "♖",
-    n: "♘",
-    b: "♗",
-    q: "♕",
-    k: "♔",
-  };
+  const unicodeMap = { p: "♙", r: "♖", n: "♘", b: "♗", q: "♕", k: "♔" };
   return unicodeMap[piece.type] || "";
 };
 
 /**
- * Scoring: each player's score is the total value of opponent pieces captured.
+ * Scoreboard — captured-material points per player.
  */
 function updateScoreboard() {
   const cur = { w: {}, b: {} };
@@ -219,13 +218,14 @@ function renderCaptured(id, types, colorClass) {
 }
 
 /**
- * Race status bar — role, move counts, lead and the live cooldown countdown.
+ * Race status bar.
  */
 function updateRaceUI() {
   const role = document.getElementById("raceRole");
   const status = document.getElementById("raceStatus");
   const counts = document.getElementById("raceCounts");
   const bar = document.getElementById("cooldownBar");
+  const rules = document.getElementById("raceRules");
   if (!status) return;
 
   if (role) {
@@ -239,6 +239,13 @@ function updateRaceUI() {
   if (counts) {
     counts.textContent = `Moves — White ${gameMoves.w} · Black ${gameMoves.b}`;
   }
+  if (rules) {
+    rules.textContent = settings.raceEnabled
+      ? `Race chess: up to ${settings.leadCap} moves ahead. Leading costs time — ` +
+        settings.delaysSec.map((s, i) => `+${i + 1}: ${s}s`).join(" · ") +
+        ". White moves first."
+      : "Classic chess: standard turn-by-turn play.";
+  }
 
   let txt = "";
   let pct = 0;
@@ -249,16 +256,19 @@ function updateRaceUI() {
         ? "Game over — draw"
         : `Game over — ${gameOver.winner === "w" ? "White" : "Black"} wins`;
   } else if (!myColor) {
-    txt = "Watching the race";
+    txt = "Watching the game";
+  } else if (!settings.raceEnabled) {
+    txt = gameTurn === myColor ? "Your move" : "Opponent's move";
+    pct = gameTurn === myColor ? 100 : 0;
   } else if (gameMoves.w + gameMoves.b === 0 && myColor !== "w") {
     txt = "White starts the game";
   } else {
     const lead = gameMoves[myColor] - gameMoves[otherColor(myColor)];
     const rem = localRemaining();
-    if (lead >= 3) {
-      txt = "You lead by 3 — opponent must move";
+    if (lead >= settings.leadCap) {
+      txt = `You lead by ${lead} — opponent must move`;
     } else if (rem > 0) {
-      const total = lead >= 2 ? 8000 : 3000;
+      const total = (settings.delaysSec[lead - 1] || 3) * 1000;
       txt = `Next move in ${fmt(rem)}s`;
       pct = 100 * (1 - rem / total);
     } else {
@@ -276,6 +286,108 @@ function updateRaceUI() {
 }
 
 setInterval(updateRaceUI, 100);
+
+/* ── Settings dashboard ── */
+let dashSig = "";
+
+function buildDashboard() {
+  const raceOptions = document.getElementById("raceOptions");
+  const delayRows = document.getElementById("delayRows");
+  if (!raceOptions || !delayRows) return;
+
+  raceOptions.style.display = settings.raceEnabled ? "flex" : "none";
+
+  delayRows.innerHTML = "";
+  for (let lvl = 1; lvl < settings.leadCap; lvl++) {
+    const row = document.createElement("div");
+    row.className = "delay-row";
+
+    const label = document.createElement("span");
+    label.className = "dash-label";
+    label.textContent = `Delay at +${lvl}`;
+
+    const wrap = document.createElement("span");
+    const input = document.createElement("input");
+    input.type = "number";
+    input.min = "0";
+    input.max = "120";
+    input.step = "1";
+    input.className = "delayInput";
+    input.dataset.level = String(lvl);
+    input.value = settings.delaysSec[lvl - 1] != null ? settings.delaysSec[lvl - 1] : DEFAULT_DELAYS[lvl - 1] || 8;
+    input.addEventListener("change", emitSettings);
+
+    const unit = document.createElement("span");
+    unit.className = "delay-unit";
+    unit.textContent = "s";
+
+    wrap.append(input, unit);
+    row.append(label, wrap);
+    delayRows.appendChild(row);
+  }
+}
+
+function syncDashboard() {
+  const sig = `${settings.raceEnabled}|${settings.leadCap}`;
+  if (sig !== dashSig) {
+    dashSig = sig;
+    buildDashboard();
+  } else {
+    document.querySelectorAll(".delayInput").forEach((inp) => {
+      if (document.activeElement !== inp) {
+        const lvl = parseInt(inp.dataset.level, 10);
+        if (settings.delaysSec[lvl - 1] != null) inp.value = settings.delaysSec[lvl - 1];
+      }
+    });
+  }
+
+  const toggle = document.getElementById("raceToggle");
+  if (toggle) toggle.checked = settings.raceEnabled;
+  const capVal = document.getElementById("capVal");
+  if (capVal) capVal.textContent = settings.leadCap;
+
+  const dash = document.getElementById("dashboard");
+  const lock = document.getElementById("dashLock");
+  if (dash) dash.classList.toggle("dash-disabled", gameStarted);
+  if (lock) lock.style.display = gameStarted ? "block" : "none";
+}
+
+function readDash() {
+  const raceEnabled = document.getElementById("raceToggle").checked;
+  const leadCap = parseInt(document.getElementById("capVal").textContent, 10) || 3;
+  const delaysSec = [];
+  for (let lvl = 1; lvl < leadCap; lvl++) {
+    const inp = document.querySelector(`.delayInput[data-level="${lvl}"]`);
+    let v = inp ? parseFloat(inp.value) : settings.delaysSec[lvl - 1];
+    if (isNaN(v)) v = DEFAULT_DELAYS[lvl - 1] || 8;
+    delaysSec.push(v);
+  }
+  return { raceEnabled, leadCap, delaysSec };
+}
+
+function emitSettings() {
+  socket.emit("updateSettings", readDash());
+}
+
+function wireDashboard() {
+  const toggle = document.getElementById("raceToggle");
+  const capMinus = document.getElementById("capMinus");
+  const capPlus = document.getElementById("capPlus");
+  const capVal = document.getElementById("capVal");
+  if (toggle) toggle.addEventListener("change", emitSettings);
+  if (capMinus)
+    capMinus.addEventListener("click", () => {
+      const v = Math.max(1, (parseInt(capVal.textContent, 10) || 3) - 1);
+      capVal.textContent = v;
+      emitSettings();
+    });
+  if (capPlus)
+    capPlus.addEventListener("click", () => {
+      const v = Math.min(5, (parseInt(capVal.textContent, 10) || 3) + 1);
+      capVal.textContent = v;
+      emitSettings();
+    });
+}
 
 /**
  * Promotion UI.
@@ -427,8 +539,11 @@ socket.on("gameState", (s) => {
     : null;
 
   gameMoves = s.moves || { w: 0, b: 0 };
+  gameTurn = s.turn || "w";
+  gameStarted = !!s.started;
   cooldown = s.cooldown || cooldown;
   gameOver = s.gameOver || null;
+  if (s.settings) settings = s.settings;
 
   if (myColor) {
     const cd = cooldown[myColor];
@@ -436,6 +551,7 @@ socket.on("gameState", (s) => {
   }
 
   renderBoard();
+  syncDashboard();
   updateRaceUI();
   announceGameOver();
 });
@@ -443,12 +559,15 @@ socket.on("gameState", (s) => {
 socket.on("moveRejected", (d) => {
   if (d && d.waitMs) myCooldownUntil = Date.now() + d.waitMs;
   if (d && d.reason) {
-    showMessage(
-      d.reason + (d.waitMs ? `: ${fmt(d.waitMs)}s` : ""),
-      "error"
-    );
+    showMessage(d.reason + (d.waitMs ? `: ${fmt(d.waitMs)}s` : ""), "error");
   }
   updateRaceUI();
+});
+
+socket.on("settingsRejected", (d) => {
+  if (d && d.reason) showMessage(d.reason, "error");
+  dashSig = ""; // force rebuild back to authoritative settings
+  syncDashboard();
 });
 
 socket.on("notice", (n) => {
@@ -498,7 +617,9 @@ function announceGameOver() {
 }
 
 /**
- * Initial render.
+ * Init.
  */
+wireDashboard();
+buildDashboard();
 renderBoard();
 updateRaceUI();

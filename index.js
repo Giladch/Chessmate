@@ -8,31 +8,57 @@ const server = http.createServer(app);
 const io = socket(server);
 
 /**
- * ── Race-chess variant ──────────────────────────────────────────────────────
- * Instead of strict alternation, a player may get up to LEAD_CAP moves ahead of
- * the opponent. The further ahead you are, the longer you must wait before your
- * next move (cooldown grows with your lead). White makes the first move; after
- * that it is a free race under the lead cap + delay. Standard chess legality is
- * preserved (no moving into check, no king capture); a game ends by checkmate,
- * stalemate/insufficient material (draw), resignation, or an agreed draw.
+ * ── Race-chess variant (configurable) ───────────────────────────────────────
+ * Settings are shared between both players and editable from the dashboard, but
+ * only before the game starts (no moves made yet). When `raceEnabled` is on, a
+ * player may get up to `leadCap` moves ahead of the opponent, and the further
+ * ahead they are the longer they must wait before the next move (`delaysSec`,
+ * one value per lead level 1..leadCap-1). When off, it is classic alternating
+ * chess. Standard chess legality is always preserved (no king capture); a game
+ * ends by checkmate, stalemate/insufficient material, resignation or draw.
  */
-const LEAD_CAP = 3;
-const DELAY_BY_LEAD = { 0: 0, 1: 3000, 2: 8000 }; // ms; lead >= LEAD_CAP is blocked
+let settings = {
+  raceEnabled: true,
+  leadCap: 3,
+  delaysSec: [3, 8],
+};
+const DEFAULT_DELAYS = [3, 8, 13, 20];
+
+function sanitizeSettings(s) {
+  const raceEnabled = !!(s && s.raceEnabled);
+  let leadCap = parseInt(s && s.leadCap, 10);
+  if (isNaN(leadCap)) leadCap = 3;
+  leadCap = Math.max(1, Math.min(5, leadCap));
+  const incoming = Array.isArray(s && s.delaysSec) ? s.delaysSec : [];
+  const delaysSec = [];
+  for (let i = 0; i < leadCap - 1; i++) {
+    let v = parseFloat(incoming[i]);
+    if (isNaN(v)) v = settings.delaysSec[i] != null ? settings.delaysSec[i] : DEFAULT_DELAYS[i] || 8;
+    v = Math.max(0, Math.min(120, v));
+    delaysSec.push(v);
+  }
+  return { raceEnabled, leadCap, delaysSec };
+}
+
+function effectiveCap() {
+  return settings.raceEnabled ? settings.leadCap : 1;
+}
 
 function delayForLead(lead) {
   if (lead <= 0) return 0;
-  if (lead >= LEAD_CAP) return Infinity;
-  return DELAY_BY_LEAD[lead] != null ? DELAY_BY_LEAD[lead] : 8000;
+  if (lead >= effectiveCap()) return Infinity;
+  if (!settings.raceEnabled) return Infinity;
+  const sec = settings.delaysSec[lead - 1];
+  return (sec != null ? sec : 8) * 1000;
 }
 
 const chess = new Chess();
 let players = {};
 let moves = { w: 0, b: 0 };
 let lastMoveAt = { w: 0, b: 0 };
-let gameOver = null; // { winner: 'w'|'b'|null, reason: 'checkmate'|'stalemate'|'draw'|'resign' }
+let gameOver = null; // { winner: 'w'|'b'|null, reason }
 
-// Flip the side-to-move in the FEN so the same colour can move again. En-passant
-// target is cleared because it only ever applies to the immediate reply.
+// Flip the side-to-move in the FEN so the same colour can move again (race mode).
 function forceTurn(color) {
   const parts = chess.fen().split(" ");
   parts[1] = color;
@@ -46,13 +72,21 @@ function colorOf(socketId) {
   return null;
 }
 
+function safe(fn, fallback) {
+  try {
+    return fn();
+  } catch (e) {
+    return fallback;
+  }
+}
+
 function cooldownState(now) {
   const out = {};
   ["w", "b"].forEach((c) => {
     const other = c === "w" ? "b" : "w";
     const lead = moves[c] - moves[other];
     const required = delayForLead(lead);
-    const blocked = lead >= LEAD_CAP;
+    const blocked = lead >= effectiveCap();
     out[c] = {
       lead,
       blocked,
@@ -67,19 +101,13 @@ function buildState(lastMove) {
     fen: chess.fen(),
     lastMove: lastMove || null,
     moves: { w: moves.w, b: moves.b },
+    turn: safe(() => chess.turn(), "w"),
     cooldown: cooldownState(Date.now()),
     check: safe(() => chess.isCheck(), false),
     gameOver,
-    firstMove: moves.w + moves.b === 0,
+    started: moves.w + moves.b > 0,
+    settings,
   };
-}
-
-function safe(fn, fallback) {
-  try {
-    return fn();
-  } catch (e) {
-    return fallback;
-  }
 }
 
 function broadcastState(lastMove) {
@@ -95,6 +123,17 @@ function resetGame() {
 
 function squareToRC(sq) {
   return { col: sq.charCodeAt(0) - 97, row: 8 - parseInt(sq[1]) };
+}
+
+function finishOutcome(mover) {
+  if (safe(() => chess.isCheckmate(), false)) {
+    gameOver = { winner: mover, reason: "checkmate" };
+  } else if (
+    safe(() => chess.isStalemate(), false) ||
+    safe(() => chess.isInsufficientMaterial(), false)
+  ) {
+    gameOver = { winner: null, reason: "draw" };
+  }
 }
 
 app.set("view engine", "ejs");
@@ -118,9 +157,21 @@ io.on("connection", (socket) => {
     else if (players.black === socket.id) delete players.black;
   });
 
+  socket.on("updateSettings", (incoming) => {
+    if (moves.w + moves.b !== 0) {
+      socket.emit("settingsRejected", {
+        reason: "Game in progress — Restart to change settings",
+      });
+      return;
+    }
+    settings = sanitizeSettings(incoming);
+    broadcastState(null);
+    io.emit("notice", { type: "restart", text: "Settings updated" });
+  });
+
   socket.on("move", (move) => {
     const c = colorOf(socket.id);
-    if (!c) return; // spectators cannot move
+    if (!c) return;
     if (gameOver) {
       socket.emit("moveRejected", { reason: "Game over" });
       return;
@@ -128,20 +179,41 @@ io.on("connection", (socket) => {
     const other = c === "w" ? "b" : "w";
     const now = Date.now();
 
-    // White makes the very first move of the game.
+    if (!settings.raceEnabled) {
+      // Classic alternating chess.
+      if (safe(() => chess.turn(), "w") !== c) {
+        socket.emit("moveRejected", { reason: "Not your turn" });
+        return;
+      }
+      let result = null;
+      try {
+        result = chess.move(move);
+      } catch (e) {
+        result = null;
+      }
+      if (!result) {
+        socket.emit("moveRejected", { reason: "Illegal move" });
+        return;
+      }
+      moves[c] += 1;
+      lastMoveAt[c] = now;
+      finishOutcome(c);
+      broadcastState({ from: squareToRC(result.from), to: squareToRC(result.to) });
+      return;
+    }
+
+    // Race mode.
     if (moves.w + moves.b === 0 && c !== "w") {
       socket.emit("moveRejected", { reason: "White starts" });
       return;
     }
-
     const lead = moves[c] - moves[other];
-    if (lead >= LEAD_CAP) {
+    if (lead >= effectiveCap()) {
       socket.emit("moveRejected", {
-        reason: `Max ${LEAD_CAP} moves ahead — wait for your opponent`,
+        reason: `Max ${effectiveCap()} moves ahead — wait for your opponent`,
       });
       return;
     }
-
     const required = delayForLead(lead);
     const waited = now - lastMoveAt[c];
     if (waited < required) {
@@ -149,7 +221,6 @@ io.on("connection", (socket) => {
       return;
     }
 
-    // Validate + apply with the mover's colour forced to move.
     forceTurn(c);
     let result = null;
     try {
@@ -161,19 +232,9 @@ io.on("connection", (socket) => {
       socket.emit("moveRejected", { reason: "Illegal move" });
       return;
     }
-
     moves[c] += 1;
     lastMoveAt[c] = now;
-
-    if (safe(() => chess.isCheckmate(), false)) {
-      gameOver = { winner: c, reason: "checkmate" };
-    } else if (
-      safe(() => chess.isStalemate(), false) ||
-      safe(() => chess.isInsufficientMaterial(), false)
-    ) {
-      gameOver = { winner: null, reason: "draw" };
-    }
-
+    finishOutcome(c);
     broadcastState({ from: squareToRC(result.from), to: squareToRC(result.to) });
   });
 
@@ -202,5 +263,5 @@ io.on("connection", (socket) => {
 
 const PORT = process.env.PORT || 8080;
 server.listen(PORT, "0.0.0.0", () =>
-  console.log(`🚀 Chessmate (race variant) running on :${PORT}`)
+  console.log(`🚀 Chessmate (configurable race variant) running on :${PORT}`)
 );
