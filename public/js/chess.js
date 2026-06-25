@@ -82,7 +82,76 @@ const renderBoard = () => {
   });
 
   boardElement.classList.toggle("flipped", playerRole === "b");
+  updateScoreboard();
 };
+
+/**
+ * Scoring: standard chess material values. Each player's score is the total
+ * value of the opponent pieces they have captured. Derived from the current
+ * board so it stays identical for both players and all spectators.
+ */
+const PIECE_VALUE = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+const START_COUNT = { p: 8, n: 2, b: 2, r: 2, q: 1 };
+const CAPTURE_ORDER = ["q", "r", "b", "n", "p"];
+
+function updateScoreboard() {
+  const cur = { w: {}, b: {} };
+  chess.board().forEach((row) =>
+    row.forEach((sq) => {
+      if (sq) cur[sq.color][sq.type] = (cur[sq.color][sq.type] || 0) + 1;
+    })
+  );
+
+  let scoreWhite = 0;
+  let scoreBlack = 0;
+  const capturedByWhite = []; // black pieces white has taken
+  const capturedByBlack = []; // white pieces black has taken
+
+  CAPTURE_ORDER.forEach((t) => {
+    const lostBlack = Math.max(0, START_COUNT[t] - (cur.b[t] || 0));
+    const lostWhite = Math.max(0, START_COUNT[t] - (cur.w[t] || 0));
+    for (let i = 0; i < lostBlack; i++) {
+      capturedByWhite.push(t);
+      scoreWhite += PIECE_VALUE[t];
+    }
+    for (let i = 0; i < lostWhite; i++) {
+      capturedByBlack.push(t);
+      scoreBlack += PIECE_VALUE[t];
+    }
+  });
+
+  setText("whitePoints", scoreWhite);
+  setText("blackPoints", scoreBlack);
+  renderCaptured("whiteCaptured", capturedByWhite, "cap-b"); // black glyphs
+  renderCaptured("blackCaptured", capturedByBlack, "cap-w"); // white glyphs
+
+  const diff = scoreWhite - scoreBlack;
+  setText("whiteLead", diff > 0 ? `+${diff}` : "");
+  setText("blackLead", diff < 0 ? `+${-diff}` : "");
+
+  const turn = chess.turn();
+  const wEl = document.getElementById("sideWhite");
+  const bEl = document.getElementById("sideBlack");
+  if (wEl) wEl.classList.toggle("turn", turn === "w");
+  if (bEl) bEl.classList.toggle("turn", turn === "b");
+}
+
+function setText(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = value;
+}
+
+function renderCaptured(id, types, colorClass) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.innerHTML = "";
+  types.forEach((t) => {
+    const span = document.createElement("span");
+    span.className = colorClass;
+    span.textContent = getPieceUnicode({ type: t });
+    el.appendChild(span);
+  });
+}
 
 /**
  * Handle piece move.

@@ -267,6 +267,69 @@
             background-color: rgba(255, 255, 0, 0.4) !important;
         }
 
+        /* Scoreboard */
+        .scoreboard {
+            width: 480px;
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+        .score-side {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid #34495e;
+            border-radius: 10px;
+            padding: 8px 12px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-height: 46px;
+        }
+        .score-side.turn {
+            border-color: #f1c40f;
+            box-shadow: 0 0 10px rgba(241, 196, 15, 0.35);
+        }
+        .score-head {
+            display: flex;
+            flex-direction: column;
+            line-height: 1.1;
+        }
+        .score-label {
+            font-weight: bold;
+            font-size: 14px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            color: #ecf0f1;
+        }
+        .score-lead {
+            font-size: 11px;
+            color: #2ecc71;
+            min-height: 13px;
+        }
+        .score-points {
+            font-size: 24px;
+            font-weight: bold;
+            color: #f1c40f;
+            min-width: 26px;
+            text-align: center;
+        }
+        .captured {
+            font-size: 20px;
+            line-height: 1;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1px;
+            flex: 1;
+        }
+        .captured .cap-w {
+            color: #ffffff;
+            text-shadow: 0 0 2px rgba(0, 0, 0, 0.7);
+        }
+        .captured .cap-b {
+            color: #1c1c1c;
+            text-shadow: 0 0 2px rgba(255, 255, 255, 0.45);
+        }
 
     </style>
 </head>
@@ -274,6 +337,24 @@
 <body>
     <div class="flex flex-col items-center">
         <div class="title">♜ Chessmate ♞</div>
+        <div id="scoreboard" class="scoreboard">
+            <div id="sideWhite" class="score-side">
+                <div class="score-head">
+                    <span class="score-label">White</span>
+                    <span id="whiteLead" class="score-lead"></span>
+                </div>
+                <span id="whitePoints" class="score-points">0</span>
+                <span id="whiteCaptured" class="captured"></span>
+            </div>
+            <div id="sideBlack" class="score-side">
+                <div class="score-head">
+                    <span class="score-label">Black</span>
+                    <span id="blackLead" class="score-lead"></span>
+                </div>
+                <span id="blackPoints" class="score-points">0</span>
+                <span id="blackCaptured" class="captured"></span>
+            </div>
+        </div>
         <div id="chessboard" class="chessboard"></div>
         <div class="controls">
             <button id="restartGame" class="btn btn-restart">Restart Game</button>
