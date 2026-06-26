@@ -9,6 +9,12 @@ let sourceSquare = null;
 let myColor = null; // 'w' | 'b' | null (spectator)
 let lastMove = null;
 
+// move history + review state
+let history = [];        // [{ i, color, kind, text, from, to, snapshot }]
+let reviewIndex = null;  // null = live (follow latest); else index into history
+const isReview = () => reviewIndex !== null && !!history[reviewIndex];
+const reviewSnap = () => (isReview() ? history[reviewIndex].snapshot : null);
+
 let boardData = { cells: [], pieces: {}, bbox: { minX: 0, minY: 0, maxX: 7, maxY: 7 }, zoneRows: [3, 4] };
 let cellsSet = new Set();
 let gameTurn = "w";
@@ -108,8 +114,13 @@ function squareCostClient() {
 const renderBoard = () => {
   world.innerHTML = "";
 
+  // pick the board to draw: live state, or a stored snapshot while reviewing
+  const review = isReview();
+  const src = review ? reviewSnap().board : boardData;
+  const hl = review ? reviewSnap().lastMove : lastMove;
+
   // existing cells
-  boardData.cells.forEach((k) => {
+  src.cells.forEach((k) => {
     const ci = k.indexOf(",");
     const x = parseInt(k.slice(0, ci), 10);
     const y = parseInt(k.slice(ci + 1), 10);
@@ -118,8 +129,8 @@ const renderBoard = () => {
     const sq = document.createElement("div");
     const parity = (((x + y) % 2) + 2) % 2;
     sq.className = "square " + (parity === 0 ? "light" : "dark");
-    if (boardData.zoneRows && boardData.zoneRows.indexOf(y) !== -1) sq.classList.add("zone");
-    if (lastMove && ((lastMove.from.x === x && lastMove.from.y === y) || (lastMove.to.x === x && lastMove.to.y === y))) {
+    if (src.zoneRows && src.zoneRows.indexOf(y) !== -1) sq.classList.add("zone");
+    if (hl && ((hl.from.x === x && hl.from.y === y) || (hl.to.x === x && hl.to.y === y))) {
       sq.classList.add("highlight");
     }
     sq.dataset.x = x;
@@ -127,13 +138,13 @@ const renderBoard = () => {
     sq.style.left = pos.left + "px";
     sq.style.top = pos.top + "px";
 
-    const p = boardData.pieces[k];
+    const p = src.pieces[k];
     if (p) {
       const pieceEl = document.createElement("div");
       pieceEl.className = "piece " + (p.c === "w" ? "white" : "black");
       pieceEl.style.backgroundImage = `url('${pieceImg(p.t, p.c, p.tier)}')`;
       pieceEl.style.transform = `scale(${PSIZE[p.t] || 1})`;
-      const movable = myColor === p.c && !gameOver;
+      const movable = !review && myColor === p.c && !gameOver;
       pieceEl.style.cursor = movable ? "grab" : "default";
       if (movable) {
         pieceEl.dataset.px = x;
@@ -146,8 +157,8 @@ const renderBoard = () => {
     world.appendChild(sq);
   });
 
-  // buildable candidates (only at the start of your own turn)
-  if (myColor && !gameOver && gameTurn === myColor && !myInCheck && !builtThisTurnMe) {
+  // buildable candidates (only at the start of your own turn, and not while reviewing)
+  if (!review && myColor && !gameOver && gameTurn === myColor && !myInCheck && !builtThisTurnMe) {
     const bb = boardData.bbox;
     const sqCost = squareCostClient();
     const affordable = credit[myColor] >= sqCost;
@@ -178,6 +189,7 @@ const renderBoard = () => {
 
 /* ── moves / building ── */
 const handleMove = (from, to) => {
+  if (isReview()) return;
   if (!canIMove()) {
     if (myColor && !gameOver) showMessage("Not your turn.", "error");
     return;
@@ -198,6 +210,7 @@ const handleMove = (from, to) => {
 };
 
 const handleBuild = (x, y) => {
+  if (isReview()) return;
   if (!myColor || gameOver) return;
   if (gameTurn !== myColor) { showMessage("You can only expand on your turn.", "error"); return; }
   if (myInCheck) { showMessage("Your king is in check — move first.", "error"); return; }
@@ -212,6 +225,7 @@ function closeRadial() { if (radialLayer) { radialLayer.remove(); radialLayer = 
 
 function openRadial(x, y) {
   closeRadial();
+  if (isReview()) { showMessage("Reviewing — press ⏭ for live to play.", "default"); return; }
   if (!myColor || gameOver) return;
   if (gameTurn !== myColor) { showMessage("You can only buy on your turn.", "error"); return; }
   if (myInCheck) { showMessage("Your king is in check — move first.", "error"); return; }
@@ -316,10 +330,11 @@ function wireBuyMenu() {
 function updateCredits() {
   const me = myColor || "w";
   const opp = otherColor(me);
+  const cr = isReview() && reviewSnap().credit ? reviewSnap().credit : credit;
   const myEl = document.getElementById("myCredit");
   const enEl = document.getElementById("enemyCredit");
-  if (myEl) myEl.textContent = credit[me] != null ? credit[me] : 0;
-  if (enEl) enEl.textContent = credit[opp] != null ? credit[opp] : 0;
+  if (myEl) myEl.textContent = cr[me] != null ? cr[me] : 0;
+  if (enEl) enEl.textContent = cr[opp] != null ? cr[opp] : 0;
 }
 
 function updateEdges() {
@@ -327,8 +342,9 @@ function updateEdges() {
   const bot = document.getElementById("edgeBottom");
   top.className = "edge";
   bot.className = "edge";
-  if (gameOver) return;
-  const turnC = gameTurn;
+  const over = isReview() ? reviewSnap().gameOver : gameOver;
+  if (over) return;
+  const turnC = isReview() ? reviewSnap().turn : gameTurn;
   const colorClass = turnC === "w" ? "c-white" : "c-black";
   let edge;
   if (myColor) edge = turnC === myColor ? bot : top;
@@ -351,6 +367,104 @@ function flashKing() {
   void sq.offsetWidth;
   sq.classList.add("king-flash");
   setTimeout(() => sq.classList.remove("king-flash"), 900);
+}
+
+/* ── move-history panel + review navigation ──────────────────────────────── */
+// Index currently shown (live follows the last entry).
+function activeIndex() {
+  return reviewIndex == null ? history.length - 1 : reviewIndex;
+}
+function renderMoveList() {
+  const list = document.getElementById("moveList");
+  const count = document.getElementById("moveCount");
+  const status = document.getElementById("moveStatus");
+  const panel = document.getElementById("movePanel");
+  if (!list) return;
+  count.textContent = history.length ? "(" + history.length + ")" : "";
+  list.innerHTML = "";
+  if (!history.length) {
+    const e = document.createElement("div");
+    e.className = "move-empty";
+    e.textContent = "No moves yet";
+    list.appendChild(e);
+  } else {
+    const act = activeIndex();
+    history.forEach((h, idx) => {
+      const row = document.createElement("div");
+      row.className = "move-row" + (idx === act ? " active" : "");
+      const dot = document.createElement("span");
+      dot.className = "mr-dot " + (h.color === "w" ? "w" : "b");
+      const txt = document.createElement("span");
+      txt.className = "mr-text" + (h.kind === "build" || h.kind === "buy" ? " mr-kind" : "");
+      txt.textContent = idx + 1 + ". " + h.text;
+      row.append(dot, txt);
+      row.addEventListener("click", () => {
+        if (idx >= history.length - 1) gotoLive();
+        else gotoReview(idx);
+      });
+      list.appendChild(row);
+    });
+    const activeRow = list.children[act];
+    if (activeRow && activeRow.scrollIntoView) activeRow.scrollIntoView({ block: "nearest" });
+  }
+  if (isReview()) {
+    status.className = "review";
+    status.textContent = activeIndex() + 1 + " / " + history.length;
+    panel.classList.add("reviewing");
+  } else {
+    status.className = "live";
+    status.textContent = "LIVE";
+    panel.classList.remove("reviewing");
+  }
+  updateReviewBanner();
+}
+function updateReviewBanner() {
+  const banner = document.getElementById("reviewBanner");
+  const txt = document.getElementById("reviewBannerText");
+  if (!banner) return;
+  if (isReview()) {
+    banner.classList.add("show");
+    txt.textContent = "Reviewing move " + (activeIndex() + 1) + " of " + history.length + " ";
+  } else {
+    banner.classList.remove("show");
+  }
+}
+function gotoReview(idx) {
+  if (!history.length) return;
+  idx = Math.max(0, Math.min(history.length - 1, idx));
+  // the last snapshot equals the live board — prefer live so play stays enabled
+  if (idx >= history.length - 1) { gotoLive(); return; }
+  reviewIndex = idx;
+  renderBoard(); updateEdges(); renderMoveList();
+}
+function gotoLive() {
+  reviewIndex = null;
+  renderBoard(); updateEdges(); renderMoveList();
+}
+function stepHistory(delta) {
+  if (!history.length) return;
+  const cur = reviewIndex == null ? history.length - 1 : reviewIndex;
+  gotoReview(cur + delta);
+}
+function wireMovePanel() {
+  document.getElementById("navFirst").addEventListener("click", () => gotoReview(0));
+  document.getElementById("navPrev").addEventListener("click", () => stepHistory(-1));
+  document.getElementById("navNext").addEventListener("click", () => stepHistory(1));
+  document.getElementById("navLast").addEventListener("click", () => gotoLive());
+  document.getElementById("moveStatus").addEventListener("click", () => { if (isReview()) gotoLive(); });
+  document.getElementById("reviewBanner").addEventListener("click", () => gotoLive());
+  document.getElementById("moveHead").addEventListener("click", () => {
+    const p = document.getElementById("movePanel");
+    p.classList.toggle("collapsed");
+    document.getElementById("moveChevron").textContent = p.classList.contains("collapsed") ? "▸" : "▾";
+  });
+  document.addEventListener("keydown", (e) => {
+    if (!history.length || e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+    if (e.key === "ArrowLeft") { e.preventDefault(); stepHistory(-1); }
+    else if (e.key === "ArrowRight") { e.preventDefault(); stepHistory(1); }
+    else if (e.key === "Home") { e.preventDefault(); gotoReview(0); }
+    else if (e.key === "End") { e.preventDefault(); gotoLive(); }
+  });
 }
 
 /* ── popups ── */
@@ -432,6 +546,7 @@ function cellFromScreen(clientX, clientY) {
 
 function startPieceDrag(e, x, y, p, el) {
   if (e.button !== 0) return;
+  if (isReview()) return;
   e.preventDefault();
   e.stopPropagation();
   el.style.opacity = "0.25";
@@ -541,6 +656,20 @@ socket.on("gameState", (s) => {
   announceGameOver();
 });
 
+socket.on("historyFull", (h) => {
+  history = Array.isArray(h) ? h : [];
+  if (reviewIndex != null && reviewIndex >= history.length) reviewIndex = null;
+  renderMoveList();
+  if (isReview()) { renderBoard(); updateEdges(); }
+});
+socket.on("historyAppend", (e) => {
+  if (!e) return;
+  if (e.i === history.length) history.push(e);
+  else if (e.i < history.length) history[e.i] = e; // idempotent re-delivery
+  // (a gap means we missed one; the next historyFull on (re)connect resyncs)
+  renderMoveList(); // board itself refreshes via the gameState that follows
+});
+
 socket.on("moveRejected", (d) => {
   if (d && d.reason) showMessage(d.reason, "error");
   if (d && d.kingThreat) flashKing();
@@ -549,7 +678,7 @@ socket.on("buildRejected", (d) => { if (d && d.reason) showMessage(d.reason, "er
 socket.on("buyRejected", (d) => { if (d && d.reason) showMessage(d.reason, "error"); });
 socket.on("notice", (n) => {
   if (n && n.text) showMessage(n.text, n.type || "default");
-  if (n && n.type === "restart") { lastAnnounced = null; centered = false; }
+  if (n && n.type === "restart") { lastAnnounced = null; centered = false; reviewIndex = null; }
 });
 socket.on("offerDraw", () => showConfirmation("Opponent offered a draw.", "Accept", "Reject",
   () => socket.emit("drawAccepted")));
@@ -577,5 +706,7 @@ window.addEventListener("resize", () => { if (centered) centerBoard(); });
 
 /* ── init ── */
 wireBuyMenu();
+wireMovePanel();
 renderBoard();
 updateEdges();
+renderMoveList();

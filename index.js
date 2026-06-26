@@ -39,6 +39,10 @@ let credit = { w: 0, b: 0 };
 let builtThisTurn = { w: false, b: false }; // at most one square built per turn
 let squaresBuilt = { w: 0, b: 0 }; // cumulative squares each player has built this game
 let aiColor = null; // if set ('w'|'b'), the server plays that colour as a basic AI
+// Move history: one entry per board-changing action (move/castle/build/buy),
+// each carrying a full snapshot of the game state so any past position can be
+// rendered read-only on the client without replaying the engine.
+let history = [];
 
 function safe(fn, fallback) {
   try {
@@ -134,6 +138,40 @@ function broadcastState(lastMove) {
   io.emit("gameState", buildState(lastMove));
 }
 
+/* ── move-history notation + recording ───────────────────────────────────── */
+const HGLYPH = { p: "♟", n: "♞", b: "♝", r: "♜", q: "♛", k: "♚" };
+// File label: a..z for 0..25; bracketed number for out-of-range (infinite board).
+function fileLabel(x) {
+  return x >= 0 && x < 26 ? String.fromCharCode(97 + x) : "(" + x + ")";
+}
+// Rank label mirrors classic chess: white back rank (y=7) reads as 1.
+function rankLabel(y) {
+  return String(8 - y);
+}
+function sqLabel(x, y) {
+  return fileLabel(x) + rankLabel(y);
+}
+// '+' if the move leaves the opponent in check, '#' if it's checkmate.
+function checkSuffix(mover) {
+  const opp = mover === "w" ? "b" : "w";
+  if (gameOver && gameOver.reason === "checkmate" && gameOver.winner === mover) return "#";
+  return safe(() => engine.inCheck(opp), false) ? "+" : "";
+}
+// Append a timeline entry (with a full post-action snapshot) and notify clients.
+function pushHistory(color, kind, text, from, to) {
+  const entry = {
+    i: history.length,
+    color,
+    kind, // 'move' | 'castle' | 'build' | 'buy'
+    text,
+    from: from || null,
+    to: to || null,
+    snapshot: buildState(from && to ? { from, to } : null),
+  };
+  history.push(entry);
+  io.emit("historyAppend", entry);
+}
+
 function resetGame() {
   engine = standardSetup();
   moves = { w: 0, b: 0 };
@@ -141,6 +179,7 @@ function resetGame() {
   credit = { w: settings.startingCredit || 0, b: settings.startingCredit || 0 };
   builtThisTurn = { w: false, b: false };
   squaresBuilt = { w: 0, b: 0 };
+  history = [];
 }
 
 // An illegal move is "king-threatening" if the mover is currently in check or
@@ -174,6 +213,8 @@ function commitTurn(c) {
 // Apply a board move for `color` (turn already verified). Handles earnings,
 // zone income, mate check, broadcast, and triggers the AI if it is next.
 function performMove(c, move) {
+  const movingPiece = engine.getPiece(move.from.x, move.from.y);
+  const mtype = movingPiece ? movingPiece.type : "p";
   const result = engine.move(move, c);
   if (!result) return null;
   moves[c] += 1;
@@ -181,6 +222,21 @@ function performMove(c, move) {
   if (result.captured) earn(c, MATERIAL[result.captured] || 0);
   awardZoneIncomeForMove(result.from, result.to);
   finishOutcome(c);
+  // notation for the move list
+  let text;
+  if (result.castle) {
+    text = result.castle === "k" ? "O-O" : "O-O-O";
+  } else {
+    text =
+      HGLYPH[mtype] +
+      " " +
+      sqLabel(result.from.x, result.from.y) +
+      (result.captured ? "×" : "–") +
+      sqLabel(result.to.x, result.to.y) +
+      (result.promotion ? "=" + HGLYPH[result.promotion] : "");
+  }
+  text += checkSuffix(c);
+  pushHistory(c, result.castle ? "castle" : "move", text, result.from, result.to);
   broadcastState({ from: result.from, to: result.to });
   maybeAiMove();
   return result;
@@ -230,6 +286,7 @@ io.on("connection", (socket) => {
     socket.emit("spectator");
   }
   socket.emit("gameState", buildState(null));
+  socket.emit("historyFull", history);
 
   socket.on("disconnect", () => {
     if (players.white === socket.id) delete players.white;
@@ -303,6 +360,7 @@ io.on("connection", (socket) => {
     engine.addCell(x, y);
     builtThisTurn[c] = true;
     squaresBuilt[c] += 1;
+    pushHistory(c, "build", "⊕ " + sqLabel(x, y), { x, y }, { x, y });
     broadcastState(null);
   });
 
@@ -362,12 +420,14 @@ io.on("connection", (socket) => {
     spend(c, cost);
     awardZoneIncomeForBuy(x, y); // existing zone pieces earn; the new one does not
     commitTurn(c); // counts as a turn: increments moves, passes turn, mate check
+    pushHistory(c, "buy", HGLYPH[type] + "+ " + sqLabel(x, y) + checkSuffix(c), { x, y }, { x, y });
     broadcastState(null);
     maybeAiMove();
   });
 
   socket.on("restartGame", () => {
     resetGame();
+    io.emit("historyFull", history);
     broadcastState(null);
     io.emit("notice", { type: "restart", text: "Game restarted" });
     maybeAiMove();
