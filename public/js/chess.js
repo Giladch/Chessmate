@@ -3,7 +3,7 @@ const viewport = document.getElementById("viewport");
 const world = document.getElementById("world");
 const CELL = 64;
 
-let panX = 0, panY = 0, centered = false;
+let panX = 0, panY = 0, scale = 1, centered = false;
 let draggedPiece = null;
 let sourceSquare = null;
 let myColor = null; // 'w' | 'b' | null (spectator)
@@ -17,6 +17,7 @@ let credit = { w: 0, b: 0 };
 let aiOn = null;
 let myInCheck = false;
 let builtThisTurnMe = false;
+let squaresBuilt = { w: 0, b: 0 };
 
 let settings = {
   squareCost: 1,
@@ -78,7 +79,7 @@ function isBuildableClient(x, y) {
 
 /* ── rendering ── */
 function applyPan() {
-  world.style.transform = `translate(${panX}px, ${panY}px)`;
+  world.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
 }
 
 function centerBoard() {
@@ -86,9 +87,13 @@ function centerBoard() {
   const flip = myColor === "b";
   const cxWorld = ((flip ? -1 : 1) * (bb.minX + bb.maxX)) / 2 * CELL + CELL / 2;
   const cyWorld = ((flip ? -1 : 1) * (bb.minY + bb.maxY)) / 2 * CELL + CELL / 2;
-  panX = window.innerWidth / 2 - cxWorld;
-  panY = window.innerHeight / 2 - cyWorld;
+  panX = window.innerWidth / 2 - cxWorld * scale;
+  panY = window.innerHeight / 2 - cyWorld * scale;
   applyPan();
+}
+
+function squareCostClient() {
+  return (settings.squareCost || 0) + (squaresBuilt[myColor] || 0);
 }
 
 const renderBoard = () => {
@@ -145,7 +150,8 @@ const renderBoard = () => {
   // buildable candidates (only at the start of your own turn)
   if (myColor && !gameOver && gameTurn === myColor && !myInCheck && !builtThisTurnMe) {
     const bb = boardData.bbox;
-    const affordable = credit[myColor] >= (settings.squareCost || 0);
+    const sqCost = squareCostClient();
+    const affordable = credit[myColor] >= sqCost;
     for (let y = bb.minY - 1; y <= bb.maxY + 1; y++) {
       for (let x = bb.minX - 1; x <= bb.maxX + 1; x++) {
         if (!isBuildableClient(x, y)) continue;
@@ -154,7 +160,7 @@ const renderBoard = () => {
         cand.className = "square buildable" + (affordable ? "" : " bad");
         cand.style.left = pos.left + "px";
         cand.style.top = pos.top + "px";
-        cand.title = `Build (${settings.squareCost || 0}₵)`;
+        cand.title = `Build (${sqCost}₵)`;
         cand.addEventListener("click", () => {
           if (suppressClick) return;
           handleBuild(x, y);
@@ -197,7 +203,7 @@ const handleBuild = (x, y) => {
   if (gameTurn !== myColor) { showMessage("You can only expand on your turn.", "error"); return; }
   if (myInCheck) { showMessage("Your king is in check — move first.", "error"); return; }
   if (builtThisTurnMe) { showMessage("Only one square per turn.", "error"); return; }
-  if (credit[myColor] < (settings.squareCost || 0)) { showMessage("Not enough credit for a new square.", "error"); return; }
+  if (credit[myColor] < squareCostClient()) { showMessage("Not enough credit for a new square.", "error"); return; }
   socket.emit("buildSquare", { x, y });
 };
 
@@ -436,6 +442,20 @@ window.addEventListener("pointerup", () => {
   if (moved) { suppressClick = true; setTimeout(() => (suppressClick = false), 0); }
 });
 
+// mouse-wheel zoom, toward the cursor
+viewport.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+  const newScale = Math.max(0.3, Math.min(3, scale * factor));
+  if (newScale === scale) return;
+  const wx = (e.clientX - panX) / scale;
+  const wy = (e.clientY - panY) / scale;
+  scale = newScale;
+  panX = e.clientX - wx * scale;
+  panY = e.clientY - wy * scale;
+  applyPan();
+}, { passive: false });
+
 /* ── server events ── */
 socket.on("playerRole", (role) => { myColor = role; centered = false; renderBoard(); updateEdges(); });
 socket.on("spectator", () => { myColor = null; centered = false; renderBoard(); updateEdges(); });
@@ -455,6 +475,7 @@ socket.on("gameState", (s) => {
   const bt = s.builtThisTurn || { w: false, b: false };
   myInCheck = myColor ? !!ic[myColor] : false;
   builtThisTurnMe = myColor ? !!bt[myColor] : false;
+  if (s.squaresBuilt) squaresBuilt = s.squaresBuilt;
 
   renderBoard();
   updateEdges();

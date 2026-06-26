@@ -37,6 +37,7 @@ let moves = { w: 0, b: 0 };
 let gameOver = null; // { winner: 'w'|'b'|null, reason }
 let credit = { w: 0, b: 0 };
 let builtThisTurn = { w: false, b: false }; // at most one square built per turn
+let squaresBuilt = { w: 0, b: 0 }; // cumulative squares each player has built this game
 let aiColor = null; // if set ('w'|'b'), the server plays that colour as a basic AI
 
 function safe(fn, fallback) {
@@ -120,6 +121,7 @@ function buildState(lastMove) {
       b: safe(() => engine.inCheck("b"), false),
     },
     builtThisTurn: { w: builtThisTurn.w, b: builtThisTurn.b },
+    squaresBuilt: { w: squaresBuilt.w, b: squaresBuilt.b },
     gameOver,
     started: moves.w + moves.b > 0,
     credit: { w: credit.w, b: credit.b },
@@ -138,6 +140,7 @@ function resetGame() {
   gameOver = null;
   credit = { w: settings.startingCredit || 0, b: settings.startingCredit || 0 };
   builtThisTurn = { w: false, b: false };
+  squaresBuilt = { w: 0, b: 0 };
 }
 
 // An illegal move is "king-threatening" if the mover is currently in check or
@@ -292,12 +295,14 @@ io.on("connection", (socket) => {
       socket.emit("buildRejected", { reason: "Can't build there" });
       return;
     }
-    if (!spend(c, settings.squareCost || 0)) {
+    const sqCost = (settings.squareCost || 0) + squaresBuilt[c]; // linear: +1 each square built
+    if (!spend(c, sqCost)) {
       socket.emit("buildRejected", { reason: "Not enough credit" });
       return;
     }
     engine.addCell(x, y);
     builtThisTurn[c] = true;
+    squaresBuilt[c] += 1;
     broadcastState(null);
   });
 

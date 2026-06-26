@@ -19,7 +19,7 @@
         /* full-window pannable world */
         #viewport { position: fixed; inset: 0; overflow: hidden; cursor: grab; }
         #viewport.panning { cursor: grabbing; }
-        #world { position: absolute; left: 0; top: 0; will-change: transform; }
+        #world { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
 
         .square {
             position: absolute;
@@ -69,7 +69,7 @@
 
         /* HUD chips — single design line: rounded, shadow, translucent, opaque on hover */
         .chip {
-            position: fixed; z-index: 50;
+            z-index: 50;
             background: #ffffff; color: #111;
             border-radius: 14px;
             box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
@@ -79,8 +79,8 @@
         }
         .chip:hover { opacity: 1; }
         .credit-chip { min-width: 54px; height: 54px; padding: 0 14px; font-size: 26px; font-weight: bold; }
-        #myCredit { left: 18px; bottom: 18px; }
-        #enemyCredit { right: 18px; top: 18px; }
+        #myCredit { position: fixed; left: 18px; bottom: 18px; }
+        #enemyCredit { position: fixed; right: 18px; top: 18px; }
         #controls { position: fixed; right: 18px; bottom: 18px; z-index: 50; display: flex; gap: 8px; }
         .icon-chip { width: 40px; height: 40px; font-size: 20px; font-weight: bold; cursor: pointer; border: none; font-family: inherit; }
         .icon-chip:active { transform: scale(0.92); }
@@ -136,7 +136,7 @@
     </div>
 
     <script src="https://cdn.socket.io/4.8.1/socket.io.min.js" crossorigin="anonymous"></script>
-    <script src="/js/chess.js?v=15"></script>
+    <script src="/js/chess.js?v=16"></script>
 </body>
 
 </html>
