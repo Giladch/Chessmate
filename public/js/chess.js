@@ -29,6 +29,12 @@ const otherColor = (c) => (c === "w" ? "b" : "w");
 const cellKey = (x, y) => x + "," + y;
 const RADIAL_SYM = { q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
 const GLYPH = { p: "♙", r: "♖", n: "♘", b: "♗", q: "♕", k: "♔" };
+// piece artwork tiers (more valuable piece = more refined art): t1..t4
+const PNAME = { p: "pawn", n: "knight", b: "bishop", r: "rook", q: "queen", k: "king" };
+const PTIER = { p: 1, n: 2, b: 2, r: 3, q: 4, k: 4 };
+function pieceImg(type, color) {
+  return `/pieces/${PNAME[type]}_${color === "w" ? "white" : "black"}_t${PTIER[type]}.png`;
+}
 
 function worldPos(x, y) {
   const flip = myColor === "b";
@@ -122,7 +128,7 @@ const renderBoard = () => {
     if (p) {
       const pieceEl = document.createElement("div");
       pieceEl.className = "piece " + (p.c === "w" ? "white" : "black");
-      pieceEl.innerText = GLYPH[p.t] || "";
+      pieceEl.style.backgroundImage = `url('${pieceImg(p.t, p.c)}')`;
       pieceEl.draggable = myColor === p.c && !gameOver;
       pieceEl.addEventListener("dragstart", (event) => {
         draggedPiece = pieceEl;

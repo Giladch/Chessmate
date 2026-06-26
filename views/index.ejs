@@ -62,9 +62,14 @@
             box-shadow: inset 0 0 0 3px rgba(231, 76, 60, 0.6);
         }
 
-        .piece { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; cursor: grab; }
-        .piece.white { color: #ffffff; text-shadow: 2px 2px 5px rgba(0, 0, 0, 0.8); }
-        .piece.black { color: #141414; text-shadow: 2px 2px 5px rgba(255, 255, 255, 0.5); }
+        .piece {
+            width: 100%; height: 100%;
+            background-size: contain;
+            background-repeat: no-repeat;
+            background-position: center;
+            filter: drop-shadow(1px 2px 2px rgba(0, 0, 0, 0.45));
+            cursor: grab;
+        }
         .dragging { opacity: 0.6; }
 
         /* HUD chips — single design line: rounded, shadow, translucent, opaque on hover */
@@ -136,7 +141,7 @@
     </div>
 
     <script src="https://cdn.socket.io/4.8.1/socket.io.min.js" crossorigin="anonymous"></script>
-    <script src="/js/chess.js?v=16"></script>
+    <script src="/js/chess.js?v=17"></script>
 </body>
 
 </html>
