@@ -27,6 +27,18 @@ const PROMO_TYPES = ["q", "r", "b", "n"];
 const other = (c) => (c === "w" ? "b" : "w");
 const forward = (c) => (c === "w" ? -1 : 1);
 
+// Artwork tiers reflect pieces acquired BEYOND the original count of that type.
+// The first `ORIG_COUNT` copies stay tier 1; every 2 extra copies bump the tier.
+//   knight (orig 2): 1-2 -> t1, 3-4 -> t2, 5-6 -> t3, 7-8 -> t4
+//   pawn  (orig 8): 1-8 -> t1, 9-10 -> t2, 11-12 -> t3, 13-14 -> t4
+//   queen (orig 1): 1 -> t1, 2 -> t2
+const ORIG_COUNT = { p: 8, n: 2, b: 2, r: 2, q: 1, k: 1 };
+function tierFromCount(newCount, type) {
+  const extra = newCount - (ORIG_COUNT[type] || 1);
+  if (extra <= 0) return 1;
+  return Math.min(4, 1 + Math.ceil(extra / 2));
+}
+
 // Home rows (base board): white back rank y=7 / pawn row y=6; black back y=0 / pawn y=1.
 const WHITE_BACK = 7;
 const BLACK_BACK = 0;
@@ -39,14 +51,40 @@ function createEngine() {
   // castling rights: kingside (h-rook, +x) and queenside (a-rook, -x) per colour
   const castling = { w: { k: true, q: true }, b: { k: true, q: true } };
 
-  // artwork tier for a NEW piece = how many of that type the colour already owns
-  // (1-based), capped at 4. (1st knight -> t1, 2nd -> t2, 3rd -> t3, 4th+ -> t4.)
-  function tierFor(color, type) {
+  function countOf(color, type) {
     let n = 0;
     pieces.forEach((p) => {
       if (p.color === color && p.type === type) n++;
     });
-    return Math.min(4, n + 1);
+    return n;
+  }
+  // tier of a NEW piece = based on the count the colour will have once it's added
+  function tierForNew(color, type) {
+    return tierFromCount(countOf(color, type) + 1, type);
+  }
+  // The king upgrades (and only ratchets up) when the player owns at least one
+  // piece of tier >= K in EACH of the five other types.
+  function updateKingTier(color) {
+    let king = null;
+    pieces.forEach((p) => {
+      if (p.type === "k" && p.color === color) king = p;
+    });
+    if (!king) return;
+    let achieved = 1;
+    for (let level = 4; level >= 2; level--) {
+      const allHave = ["p", "n", "b", "r", "q"].every((type) => {
+        let found = false;
+        pieces.forEach((p) => {
+          if (p.color === color && p.type === type && (p.tier || 1) >= level) found = true;
+        });
+        return found;
+      });
+      if (allHave) {
+        achieved = level;
+        break;
+      }
+    }
+    if (achieved > (king.tier || 1)) king.tier = achieved;
   }
 
   const eng = {
@@ -74,7 +112,8 @@ function createEngine() {
       if (!cells.has(k)) return { ok: false, reason: "no-cell" };
       if (pieces.has(k)) return { ok: false, reason: "occupied" };
       if (type === "k") return { ok: false, reason: "no-king" };
-      pieces.set(k, { type, color, tier: tierFor(color, type) });
+      pieces.set(k, { type, color, tier: tierForNew(color, type) });
+      updateKingTier(color);
       return { ok: true };
     },
     removePiece(x, y) {
@@ -389,7 +428,8 @@ function createEngine() {
       const toK = KEY(mv.to.x, mv.to.y);
       const captured = pieces.get(toK) || null;
       pieces.delete(fromK);
-      pieces.set(toK, promotion ? { type: promotion, color, tier: tierFor(color, promotion) } : moving);
+      pieces.set(toK, promotion ? { type: promotion, color, tier: tierForNew(color, promotion) } : moving);
+      if (promotion) updateKingTier(color);
       eng.turn = other(color);
 
       // update castling rights
@@ -431,7 +471,7 @@ function standardSetup() {
   const put = (x, y, type, color) => {
     const ck = color + "," + type;
     cnt[ck] = (cnt[ck] || 0) + 1;
-    eng.pieces.set(x + "," + y, { type, color, tier: Math.min(4, cnt[ck]) });
+    eng.pieces.set(x + "," + y, { type, color, tier: tierFromCount(cnt[ck], type) });
   };
   for (let x = 0; x < 8; x++) {
     put(x, BLACK_BACK, back[x], "b");
