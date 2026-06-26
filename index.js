@@ -58,6 +58,25 @@ function earn(color, amount) {
   credit[color] += Math.max(0, amount || 0);
 }
 
+// How many pieces of a given type a colour currently owns on the board.
+function countPieces(color, type) {
+  let n = 0;
+  engine.pieces.forEach((p) => {
+    if (p.color === color && p.type === type) n++;
+  });
+  return n;
+}
+
+// Dynamic buy cost: pawns always 1; every other type costs base * (owned + 1),
+// so each additional unit of a type gets more expensive (queen: 9, then 18…).
+function pieceBuyCost(color, type) {
+  if (type === "p") return 1;
+  const base = (settings.pieceCost && settings.pieceCost[type]) || 0;
+  return base * (countPieces(color, type) + 1);
+}
+
+const MAX_QUEENS = 2;
+
 // Zone income is awarded per turn, but only for pieces that BOTH started and
 // ended the acting player's turn inside the zone (a piece that just moved in,
 // or one just bought, earns nothing this turn).
@@ -269,7 +288,11 @@ io.on("connection", (socket) => {
       socket.emit("buyRejected", { reason: "Only pawns on the second row" });
       return;
     }
-    const cost = (settings.pieceCost && settings.pieceCost[type]) || 0;
+    if (type === "q" && countPieces(c, "q") >= MAX_QUEENS) {
+      socket.emit("buyRejected", { reason: `Max ${MAX_QUEENS} queens` });
+      return;
+    }
+    const cost = pieceBuyCost(c, type);
     if (!canAfford(c, cost)) {
       socket.emit("buyRejected", { reason: "Not enough credit" });
       return;

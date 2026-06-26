@@ -206,6 +206,25 @@ function classifyHomeClient(x, y, color) {
   return "none";
 }
 
+// dynamic buy pricing (mirrors the server): pawn always 1; otherwise
+// base * (owned + 1). Queen is capped at 2 total.
+function countMyPieces(color, type) {
+  let n = 0;
+  Object.keys(boardData.pieces).forEach((k) => {
+    const p = boardData.pieces[k];
+    if (p.c === color && p.t === type) n++;
+  });
+  return n;
+}
+function pieceBuyCostClient(color, type) {
+  if (type === "p") return 1;
+  const base = (settings.pieceCost && settings.pieceCost[type]) || 0;
+  return base * (countMyPieces(color, type) + 1);
+}
+function queenMaxed(color) {
+  return countMyPieces(color, "q") >= 2;
+}
+
 let radialLayer = null;
 function closeRadial() {
   if (radialLayer) {
@@ -251,8 +270,9 @@ function openRadial(x, y) {
     const R = n === 1 ? 0 : 64;
     const ox = Math.cos(ang) * R;
     const oy = Math.sin(ang) * R;
-    const cost = (settings.pieceCost && settings.pieceCost[t]) || 0;
-    const affordable = credit[myColor] >= cost;
+    const maxed = t === "q" && queenMaxed(myColor);
+    const cost = pieceBuyCostClient(myColor, t);
+    const affordable = !maxed && credit[myColor] >= cost;
     const el = document.createElement("div");
     el.className = "radial-option" + (affordable ? "" : " disabled");
     el.style.left = ox + "px";
@@ -260,9 +280,10 @@ function openRadial(x, y) {
     el.dataset.t = t;
     el.innerHTML =
       `<span class="ro-glyph ${myColor === "w" ? "ro-w" : "ro-b"}">${RADIAL_SYM[t]}</span>` +
-      `<span class="ro-cost">${cost}₵</span>`;
+      `<span class="ro-cost">${maxed ? "MAX" : cost + "₵"}</span>`;
     el.addEventListener("click", () => {
       if (affordable) socket.emit("buyPiece", { x, y, type: t });
+      else if (maxed) showMessage("You already have 2 queens.", "error");
       else showMessage("Not enough credit for that piece.", "error");
       closeRadial();
     });
@@ -291,8 +312,10 @@ function openRadial(x, y) {
     const hovered = menu.querySelector(".radial-option.hover");
     if (hovered) {
       const t = hovered.dataset.t;
-      const cost = (settings.pieceCost && settings.pieceCost[t]) || 0;
-      if (credit[myColor] >= cost) socket.emit("buyPiece", { x, y, type: t });
+      const maxed = t === "q" && queenMaxed(myColor);
+      const cost = pieceBuyCostClient(myColor, t);
+      if (!maxed && credit[myColor] >= cost) socket.emit("buyPiece", { x, y, type: t });
+      else if (maxed) showMessage("You already have 2 queens.", "error");
       else showMessage("Not enough credit for that piece.", "error");
     }
     closeRadial();
