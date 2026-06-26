@@ -32,7 +32,7 @@ const GLYPH = { p: "♙", r: "♖", n: "♘", b: "♗", q: "♕", k: "♔" };
 // piece artwork tiers (more valuable piece = more refined art): t1..t4
 const PNAME = { p: "pawn", n: "knight", b: "bishop", r: "rook", q: "queen", k: "king" };
 // relative on-board size per type (shorter pieces are visually smaller)
-const PSIZE = { p: 0.62, n: 0.72, r: 0.72, b: 0.86, q: 0.95, k: 1.0 };
+const PSIZE = { p: 0.75, n: 0.82, r: 0.82, b: 0.90, q: 0.97, k: 1.0 };
 // tier is per-piece (the Nth piece of a type a player owns -> tier N, capped at 4)
 function pieceImg(type, color, tier) {
   const t = Math.min(4, Math.max(1, tier || 1));
