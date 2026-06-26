@@ -24,8 +24,12 @@ let credit = { w: 0, b: 0 };
 let myInCheck = false;
 let builtThisTurnMe = false;
 
-let settings = { raceEnabled: true, leadCap: 2, delaysSec: [15] };
-const DEFAULT_DELAYS = [15, 15, 15, 15];
+let settings = {
+  squareCost: 1,
+  startingCredit: 0,
+  pieceCost: { p: 1, n: 3, b: 3, r: 5, q: 9 },
+  zoneIncome: { p: 1, n: 0, b: 0, r: 0, q: 0 },
+};
 
 /* ── Material scoring ── */
 const PIECE_VALUE = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
@@ -144,9 +148,9 @@ const renderBoard = () => {
     boardElement.appendChild(sq);
   });
 
-  // buildable candidate cells (only when allowed: seated, live, not in check,
-  // and you haven't already built this turn)
-  if (myColor && !gameOver && !myInCheck && !builtThisTurnMe) {
+  // buildable candidate cells (only at the start of your own turn: seated, live,
+  // your turn, not in check, and you haven't already built this turn)
+  if (myColor && !gameOver && gameTurn === myColor && !myInCheck && !builtThisTurnMe) {
     const affordable = credit[myColor] >= (settings.squareCost || 0);
     for (let y = rMinY; y <= rMaxY; y++) {
       for (let x = rMinX; x <= rMaxX; x++) {
@@ -169,6 +173,10 @@ const renderBoard = () => {
 
 const handleBuild = (x, y) => {
   if (!myColor || gameOver) return;
+  if (gameTurn !== myColor) {
+    showMessage("You can only expand on your turn.", "error");
+    return;
+  }
   if (myInCheck) {
     showMessage("Your king is in check — move first.", "error");
     return;
@@ -209,6 +217,10 @@ function closeRadial() {
 function openRadial(x, y) {
   closeRadial();
   if (!myColor || gameOver) return;
+  if (gameTurn !== myColor) {
+    showMessage("You can only buy on your turn.", "error");
+    return;
+  }
   if (myInCheck) {
     showMessage("Your king is in check — move first.", "error");
     return;
@@ -497,138 +509,6 @@ function updateRaceUI() {
 
 setInterval(updateRaceUI, 100);
 
-/* ── Settings dashboard ── */
-let dashSig = "";
-
-function buildDashboard() {
-  const raceOptions = document.getElementById("raceOptions");
-  const delayRows = document.getElementById("delayRows");
-  if (!raceOptions || !delayRows) return;
-
-  raceOptions.style.display = settings.raceEnabled ? "flex" : "none";
-
-  delayRows.innerHTML = "";
-  for (let lvl = 1; lvl < settings.leadCap; lvl++) {
-    const row = document.createElement("div");
-    row.className = "delay-row";
-
-    const label = document.createElement("span");
-    label.className = "dash-label";
-    label.textContent = `Delay at +${lvl}`;
-
-    const wrap = document.createElement("span");
-    const input = document.createElement("input");
-    input.type = "number";
-    input.min = "0";
-    input.max = "120";
-    input.step = "1";
-    input.className = "delayInput";
-    input.dataset.level = String(lvl);
-    input.value = settings.delaysSec[lvl - 1] != null ? settings.delaysSec[lvl - 1] : DEFAULT_DELAYS[lvl - 1] || 8;
-    input.addEventListener("change", emitSettings);
-
-    const unit = document.createElement("span");
-    unit.className = "delay-unit";
-    unit.textContent = "s";
-
-    wrap.append(input, unit);
-    row.append(label, wrap);
-    delayRows.appendChild(row);
-  }
-}
-
-function syncDashboard() {
-  const sig = `${settings.raceEnabled}|${settings.leadCap}`;
-  if (sig !== dashSig) {
-    dashSig = sig;
-    buildDashboard();
-  } else {
-    document.querySelectorAll(".delayInput").forEach((inp) => {
-      if (document.activeElement !== inp) {
-        const lvl = parseInt(inp.dataset.level, 10);
-        if (settings.delaysSec[lvl - 1] != null) inp.value = settings.delaysSec[lvl - 1];
-      }
-    });
-  }
-
-  const toggle = document.getElementById("raceToggle");
-  if (toggle) toggle.checked = settings.raceEnabled;
-  const capVal = document.getElementById("capVal");
-  if (capVal) capVal.textContent = settings.leadCap;
-
-  const setIfFree = (id, val) => {
-    const el = document.getElementById(id);
-    if (el && document.activeElement !== el && val != null) el.value = val;
-  };
-  setIfFree("econStart", settings.startingCredit);
-  setIfFree("econSquare", settings.squareCost);
-  if (settings.pieceCost) {
-    document.querySelectorAll(".pc").forEach((inp) => {
-      if (document.activeElement !== inp && settings.pieceCost[inp.dataset.t] != null)
-        inp.value = settings.pieceCost[inp.dataset.t];
-    });
-  }
-  if (settings.zoneIncome) {
-    document.querySelectorAll(".zi").forEach((inp) => {
-      if (document.activeElement !== inp && settings.zoneIncome[inp.dataset.t] != null)
-        inp.value = settings.zoneIncome[inp.dataset.t];
-    });
-  }
-
-  const dash = document.getElementById("dashboard");
-  const lock = document.getElementById("dashLock");
-  if (dash) dash.classList.toggle("dash-disabled", gameStarted);
-  if (lock) lock.style.display = gameStarted ? "block" : "none";
-}
-
-function readDash() {
-  const raceEnabled = document.getElementById("raceToggle").checked;
-  const leadCap = parseInt(document.getElementById("capVal").textContent, 10) || 3;
-  const delaysSec = [];
-  for (let lvl = 1; lvl < leadCap; lvl++) {
-    const inp = document.querySelector(`.delayInput[data-level="${lvl}"]`);
-    let v = inp ? parseFloat(inp.value) : settings.delaysSec[lvl - 1];
-    if (isNaN(v)) v = DEFAULT_DELAYS[lvl - 1] || 8;
-    delaysSec.push(v);
-  }
-  const pieceCost = {};
-  const zoneIncome = {};
-  document.querySelectorAll(".pc").forEach((inp) => (pieceCost[inp.dataset.t] = parseFloat(inp.value)));
-  document.querySelectorAll(".zi").forEach((inp) => (zoneIncome[inp.dataset.t] = parseFloat(inp.value)));
-  const startEl = document.getElementById("econStart");
-  const sqEl = document.getElementById("econSquare");
-  const startingCredit = startEl ? parseFloat(startEl.value) : settings.startingCredit;
-  const squareCost = sqEl ? parseFloat(sqEl.value) : settings.squareCost;
-  return { raceEnabled, leadCap, delaysSec, startingCredit, squareCost, pieceCost, zoneIncome };
-}
-
-function emitSettings() {
-  socket.emit("updateSettings", readDash());
-}
-
-function wireDashboard() {
-  const toggle = document.getElementById("raceToggle");
-  const capMinus = document.getElementById("capMinus");
-  const capPlus = document.getElementById("capPlus");
-  const capVal = document.getElementById("capVal");
-  if (toggle) toggle.addEventListener("change", emitSettings);
-  if (capMinus)
-    capMinus.addEventListener("click", () => {
-      const v = Math.max(1, (parseInt(capVal.textContent, 10) || 3) - 1);
-      capVal.textContent = v;
-      emitSettings();
-    });
-  if (capPlus)
-    capPlus.addEventListener("click", () => {
-      const v = Math.min(5, (parseInt(capVal.textContent, 10) || 3) + 1);
-      capVal.textContent = v;
-      emitSettings();
-    });
-  document.querySelectorAll(".econInput").forEach((inp) =>
-    inp.addEventListener("change", emitSettings)
-  );
-}
-
 /**
  * Promotion UI.
  */
@@ -795,7 +675,6 @@ socket.on("gameState", (s) => {
   }
 
   renderBoard();
-  syncDashboard();
   updateRaceUI();
   announceGameOver();
 });
@@ -828,12 +707,6 @@ function flashKing() {
   sq.classList.add("king-flash");
   setTimeout(() => sq.classList.remove("king-flash"), 900);
 }
-
-socket.on("settingsRejected", (d) => {
-  if (d && d.reason) showMessage(d.reason, "error");
-  dashSig = "";
-  syncDashboard();
-});
 
 socket.on("notice", (n) => {
   if (n && n.text) showMessage(n.text, n.type || "default");
@@ -892,8 +765,6 @@ function announceGameOver() {
 /**
  * Init.
  */
-wireDashboard();
 wireBuyMenu();
-buildDashboard();
 renderBoard();
 updateRaceUI();

@@ -652,57 +652,6 @@
 
 <body>
     <div class="layout">
-    <div id="dashboard" class="dashboard">
-        <div class="dash-title">⚙️ Game Settings</div>
-        <div class="dash-sub">Shared by both players · change before the game starts</div>
-
-        <div class="dash-row">
-            <span class="dash-label">Race mode</span>
-            <label class="switch"><input type="checkbox" id="raceToggle"><span class="slider"></span></label>
-        </div>
-
-        <div id="raceOptions" class="dash-section">
-            <div class="dash-row">
-                <span class="dash-label">Max moves ahead</span>
-                <div class="stepper">
-                    <button id="capMinus" type="button">−</button>
-                    <span id="capVal" class="val">3</span>
-                    <button id="capPlus" type="button">+</button>
-                </div>
-            </div>
-            <div id="delayRows"></div>
-        </div>
-
-        <div class="dash-section">
-            <div class="dash-row"><span class="dash-label" style="font-weight:bold;">💰 Economy</span></div>
-            <div class="dash-row">
-                <span class="dash-label">Starting credit</span>
-                <span><input type="number" id="econStart" class="econInput" min="0" max="9999"> <span class="delay-unit">₵</span></span>
-            </div>
-            <div class="dash-row">
-                <span class="dash-label">New square cost</span>
-                <span><input type="number" id="econSquare" class="econInput" min="0" max="999"> <span class="delay-unit">₵</span></span>
-            </div>
-            <div class="econ-label">Piece cost (₵)</div>
-            <div class="econ-grid">
-                <span class="econ-cell"><label>♟</label><input type="number" id="pc_p" class="econInput pc" data-t="p" min="0" max="999"></span>
-                <span class="econ-cell"><label>♞</label><input type="number" id="pc_n" class="econInput pc" data-t="n" min="0" max="999"></span>
-                <span class="econ-cell"><label>♝</label><input type="number" id="pc_b" class="econInput pc" data-t="b" min="0" max="999"></span>
-                <span class="econ-cell"><label>♜</label><input type="number" id="pc_r" class="econInput pc" data-t="r" min="0" max="999"></span>
-                <span class="econ-cell"><label>♛</label><input type="number" id="pc_q" class="econInput pc" data-t="q" min="0" max="999"></span>
-            </div>
-            <div class="econ-label">Zone income / turn (₵)</div>
-            <div class="econ-grid">
-                <span class="econ-cell"><label>♟</label><input type="number" id="zi_p" class="econInput zi" data-t="p" min="0" max="999"></span>
-                <span class="econ-cell"><label>♞</label><input type="number" id="zi_n" class="econInput zi" data-t="n" min="0" max="999"></span>
-                <span class="econ-cell"><label>♝</label><input type="number" id="zi_b" class="econInput zi" data-t="b" min="0" max="999"></span>
-                <span class="econ-cell"><label>♜</label><input type="number" id="zi_r" class="econInput zi" data-t="r" min="0" max="999"></span>
-                <span class="econ-cell"><label>♛</label><input type="number" id="zi_q" class="econInput zi" data-t="q" min="0" max="999"></span>
-            </div>
-        </div>
-
-        <div id="dashLock" class="dash-lock" style="display:none;">Game in progress — press Restart to change settings.</div>
-    </div>
     <div class="flex flex-col items-center">
         <div class="title">♜ Chessmate ♞</div>
         <div id="scoreboard" class="scoreboard">
@@ -746,7 +695,7 @@
     <!-- External Scripts -->
     <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"
         crossorigin="anonymous"></script>
-    <script src="/js/chess.js?v=12"></script>
+    <script src="/js/chess.js?v=13"></script>
 </body>
 
 </html>

@@ -8,85 +8,44 @@ const server = http.createServer(app);
 const io = socket(server);
 
 /**
- * ── Race-chess variant (configurable) ───────────────────────────────────────
- * Settings are shared between both players and editable from the dashboard, but
- * only before the game starts (no moves made yet). When `raceEnabled` is on, a
- * player may get up to `leadCap` moves ahead of the opponent, and the further
- * ahead they are the longer they must wait before the next move (`delaysSec`,
- * one value per lead level 1..leadCap-1). When off, it is classic alternating
- * chess. Standard chess legality is always preserved (no king capture); a game
- * ends by checkmate, stalemate/insufficient material, resignation or draw.
+ * ── Chessmate (released ruleset) ─────────────────────────────────────────────
+ * Classic turn-by-turn chess on a board that can grow. A shared per-player
+ * points wallet (credit) is earned from captures and from the central "zone"
+ * income, and spent on building new squares and buying pieces. Rules are fixed
+ * (no in-game settings UI):
+ *   • Starting credit 0; a new square costs 1.
+ *   • Piece cost = material value (P1 N3 B3 R5 Q9).
+ *   • Zone income/turn: pawn 1, everything else 0; only for a piece that BOTH
+ *     started and ended the acting player's turn inside the zone.
+ *   • You may expand the board (one square) only at the start of your own turn,
+ *     and not while your king is in check.
+ *   • Buying a piece costs a turn (only on your turn, not while in check).
+ *   • Win by checkmate.
  */
 const MATERIAL = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
 const PTYPES = ["p", "n", "b", "r", "q"];
-
-let settings = {
-  raceEnabled: true,
-  leadCap: 2,
-  delaysSec: [15],
-  // economy
+const settings = {
+  squareCost: 1,
   startingCredit: 0,
-  squareCost: 2,
   pieceCost: { p: 1, n: 3, b: 3, r: 5, q: 9 },
   zoneIncome: { p: 1, n: 0, b: 0, r: 0, q: 0 },
 };
-const DEFAULT_DELAYS = [15, 15, 15, 15];
-const DEFAULT_PIECE_COST = { p: 1, n: 3, b: 3, r: 5, q: 9 };
-const DEFAULT_ZONE_INCOME = { p: 1, n: 0, b: 0, r: 0, q: 0 };
-
-function clampNum(v, fallback, min, max) {
-  let n = parseFloat(v);
-  if (isNaN(n)) n = fallback;
-  return Math.max(min, Math.min(max, n));
-}
-
-function sanitizeSettings(s) {
-  const raceEnabled = !!(s && s.raceEnabled);
-  let leadCap = parseInt(s && s.leadCap, 10);
-  if (isNaN(leadCap)) leadCap = 3;
-  leadCap = Math.max(1, Math.min(5, leadCap));
-  const incoming = Array.isArray(s && s.delaysSec) ? s.delaysSec : [];
-  const delaysSec = [];
-  for (let i = 0; i < leadCap - 1; i++) {
-    let v = parseFloat(incoming[i]);
-    if (isNaN(v)) v = settings.delaysSec[i] != null ? settings.delaysSec[i] : DEFAULT_DELAYS[i] || 8;
-    v = Math.max(0, Math.min(120, v));
-    delaysSec.push(v);
-  }
-  const inPC = (s && s.pieceCost) || {};
-  const inZI = (s && s.zoneIncome) || {};
-  const pieceCost = {};
-  const zoneIncome = {};
-  PTYPES.forEach((t) => {
-    pieceCost[t] = clampNum(inPC[t], settings.pieceCost[t] != null ? settings.pieceCost[t] : DEFAULT_PIECE_COST[t], 0, 999);
-    zoneIncome[t] = clampNum(inZI[t], settings.zoneIncome[t] != null ? settings.zoneIncome[t] : DEFAULT_ZONE_INCOME[t], 0, 999);
-  });
-  const startingCredit = clampNum(s && s.startingCredit, settings.startingCredit || 0, 0, 9999);
-  const squareCost = clampNum(s && s.squareCost, settings.squareCost != null ? settings.squareCost : 2, 0, 999);
-  return { raceEnabled, leadCap, delaysSec, startingCredit, squareCost, pieceCost, zoneIncome };
-}
-
-function effectiveCap() {
-  return settings.raceEnabled ? settings.leadCap : 1;
-}
-
-function delayForLead(lead) {
-  if (lead <= 0) return 0;
-  if (lead >= effectiveCap()) return Infinity;
-  if (!settings.raceEnabled) return Infinity;
-  const sec = settings.delaysSec[lead - 1];
-  return (sec != null ? sec : 8) * 1000;
-}
 
 let engine = standardSetup();
 let players = {};
 let moves = { w: 0, b: 0 };
-let lastMoveAt = { w: 0, b: 0 };
 let gameOver = null; // { winner: 'w'|'b'|null, reason }
-let credit = { w: 0, b: 0 }; // shared per-player points wallet
+let credit = { w: 0, b: 0 };
 let builtThisTurn = { w: false, b: false }; // at most one square built per turn
 
-// ── wallet API (used by capture/income now; squares/pieces in later phases) ──
+function safe(fn, fallback) {
+  try {
+    return fn();
+  } catch (e) {
+    return fallback;
+  }
+}
+
 function canAfford(color, cost) {
   return credit[color] >= cost;
 }
@@ -100,36 +59,27 @@ function earn(color, amount) {
 }
 
 // Zone income is awarded per turn, but only for pieces that BOTH started and
-// ended the acting player's turn inside the zone. So a piece that just moved
-// into the zone, or one that was just bought, earns nothing this turn; a piece
-// that moved out of the zone naturally earns nothing (it no longer ends there).
+// ended the acting player's turn inside the zone (a piece that just moved in,
+// or one just bought, earns nothing this turn).
 function awardZoneIncomeForMove(from, to) {
   engine.pieces.forEach((p, k) => {
     const ci = k.indexOf(",");
     const x = parseInt(k.slice(0, ci), 10);
     const y = parseInt(k.slice(ci + 1), 10);
-    if (!engine.isInZone(x, y)) return; // must end the turn in the zone
-    // the piece that just moved (now at `to`) only counts if it also started
-    // the turn in the zone (i.e. its `from` square was in the zone)
+    if (!engine.isInZone(x, y)) return;
     if (x === to.x && y === to.y && !engine.isInZone(from.x, from.y)) return;
     earn(p.color, settings.zoneIncome[p.type] || 0);
   });
 }
-
 function awardZoneIncomeForBuy(bx, by) {
   engine.pieces.forEach((p, k) => {
     const ci = k.indexOf(",");
     const x = parseInt(k.slice(0, ci), 10);
     const y = parseInt(k.slice(ci + 1), 10);
     if (!engine.isInZone(x, y)) return;
-    if (x === bx && y === by) return; // the just-bought piece earns nothing this turn
+    if (x === bx && y === by) return;
     earn(p.color, settings.zoneIncome[p.type] || 0);
   });
-}
-
-// Allow the same colour to move again (race mode) by forcing whose turn it is.
-function forceTurn(color) {
-  engine.setTurn(color);
 }
 
 function colorOf(socketId) {
@@ -138,37 +88,12 @@ function colorOf(socketId) {
   return null;
 }
 
-function safe(fn, fallback) {
-  try {
-    return fn();
-  } catch (e) {
-    return fallback;
-  }
-}
-
-function cooldownState(now) {
-  const out = {};
-  ["w", "b"].forEach((c) => {
-    const other = c === "w" ? "b" : "w";
-    const lead = moves[c] - moves[other];
-    const required = delayForLead(lead);
-    const blocked = lead >= effectiveCap();
-    out[c] = {
-      lead,
-      blocked,
-      remainingMs: blocked ? null : Math.max(0, required - (now - lastMoveAt[c])),
-    };
-  });
-  return out;
-}
-
 function buildState(lastMove) {
   return {
     board: engine.serialize(),
     lastMove: lastMove || null,
     moves: { w: moves.w, b: moves.b },
     turn: engine.turn,
-    cooldown: cooldownState(Date.now()),
     check: safe(() => engine.inCheck(engine.turn), false),
     inCheck: {
       w: safe(() => engine.inCheck("w"), false),
@@ -189,7 +114,6 @@ function broadcastState(lastMove) {
 function resetGame() {
   engine = standardSetup();
   moves = { w: 0, b: 0 };
-  lastMoveAt = { w: 0, b: 0 };
   gameOver = null;
   credit = { w: settings.startingCredit || 0, b: settings.startingCredit || 0 };
   builtThisTurn = { w: false, b: false };
@@ -204,7 +128,7 @@ function illegalThreat(mv, c) {
   );
 }
 
-// After `mover` plays, evaluate the opponent for checkmate / stalemate.
+// After `mover` acts, evaluate the opponent for checkmate / stalemate.
 function finishOutcome(mover) {
   const opp = mover === "w" ? "b" : "w";
   if (safe(() => engine.isCheckmate(opp), false)) {
@@ -214,40 +138,12 @@ function finishOutcome(mover) {
   }
 }
 
-// Shared turn-gating for turn-consuming actions (a move OR a piece-buy). Emits
-// a rejection on `ev` and returns true if blocked.
-function turnActionBlocked(c, socket, ev) {
-  const other = c === "w" ? "b" : "w";
-  const now = Date.now();
-  if (settings.raceEnabled) {
-    if (moves.w + moves.b === 0 && c !== "w") {
-      socket.emit(ev, { reason: "White starts" });
-      return true;
-    }
-    const lead = moves[c] - moves[other];
-    if (lead >= effectiveCap()) {
-      socket.emit(ev, { reason: `Max ${effectiveCap()} moves ahead — wait for your opponent` });
-      return true;
-    }
-    const required = delayForLead(lead);
-    const waited = now - lastMoveAt[c];
-    if (waited < required) {
-      socket.emit(ev, { reason: "On cooldown", waitMs: required - waited });
-      return true;
-    }
-  } else if (engine.turn !== c) {
-    socket.emit(ev, { reason: "Not your turn" });
-    return true;
-  }
-  return false;
-}
-
-// Bookkeeping for a turn-consuming action (used by piece-buy; moves do it inline).
+// Bookkeeping for a turn-consuming action that isn't a board move (piece-buy):
+// count the turn, refresh the build allowance, pass the turn, check for mate.
 function commitTurn(c) {
   moves[c] += 1;
-  lastMoveAt[c] = Date.now();
   builtThisTurn[c] = false;
-  if (!settings.raceEnabled) engine.setTurn(c === "w" ? "b" : "w");
+  engine.setTurn(c === "w" ? "b" : "w");
   finishOutcome(c);
 }
 
@@ -272,18 +168,6 @@ io.on("connection", (socket) => {
     else if (players.black === socket.id) delete players.black;
   });
 
-  socket.on("updateSettings", (incoming) => {
-    if (moves.w + moves.b !== 0) {
-      socket.emit("settingsRejected", {
-        reason: "Game in progress — Restart to change settings",
-      });
-      return;
-    }
-    settings = sanitizeSettings(incoming);
-    broadcastState(null);
-    io.emit("notice", { type: "restart", text: "Settings updated" });
-  });
-
   socket.on("move", (move) => {
     const c = colorOf(socket.id);
     if (!c) return;
@@ -291,57 +175,16 @@ io.on("connection", (socket) => {
       socket.emit("moveRejected", { reason: "Game over" });
       return;
     }
-    const other = c === "w" ? "b" : "w";
-    const now = Date.now();
-
-    if (!settings.raceEnabled) {
-      // Classic alternating chess.
-      if (engine.turn !== c) {
-        socket.emit("moveRejected", { reason: "Not your turn" });
-        return;
-      }
-      const result = engine.move(move, c);
-      if (!result) {
-        socket.emit("moveRejected", { reason: "Illegal move", kingThreat: illegalThreat(move, c) });
-        return;
-      }
-      moves[c] += 1;
-      lastMoveAt[c] = now;
-      builtThisTurn[c] = false;
-      if (result.captured) earn(c, MATERIAL[result.captured] || 0);
-      awardZoneIncomeForMove(result.from, result.to);
-      finishOutcome(c);
-      broadcastState({ from: result.from, to: result.to });
+    if (engine.turn !== c) {
+      socket.emit("moveRejected", { reason: "Not your turn" });
       return;
     }
-
-    // Race mode.
-    if (moves.w + moves.b === 0 && c !== "w") {
-      socket.emit("moveRejected", { reason: "White starts" });
-      return;
-    }
-    const lead = moves[c] - moves[other];
-    if (lead >= effectiveCap()) {
-      socket.emit("moveRejected", {
-        reason: `Max ${effectiveCap()} moves ahead — wait for your opponent`,
-      });
-      return;
-    }
-    const required = delayForLead(lead);
-    const waited = now - lastMoveAt[c];
-    if (waited < required) {
-      socket.emit("moveRejected", { reason: "On cooldown", waitMs: required - waited });
-      return;
-    }
-
-    forceTurn(c);
     const result = engine.move(move, c);
     if (!result) {
       socket.emit("moveRejected", { reason: "Illegal move", kingThreat: illegalThreat(move, c) });
       return;
     }
     moves[c] += 1;
-    lastMoveAt[c] = now;
     builtThisTurn[c] = false;
     if (result.captured) earn(c, MATERIAL[result.captured] || 0);
     awardZoneIncomeForMove(result.from, result.to);
@@ -356,10 +199,8 @@ io.on("connection", (socket) => {
       socket.emit("buildRejected", { reason: "Game over" });
       return;
     }
-    const x = parseInt(pos && pos.x, 10);
-    const y = parseInt(pos && pos.y, 10);
-    if (!Number.isInteger(x) || !Number.isInteger(y)) {
-      socket.emit("buildRejected", { reason: "Bad request" });
+    if (engine.turn !== c) {
+      socket.emit("buildRejected", { reason: "Only at the start of your turn" });
       return;
     }
     if (safe(() => engine.inCheck(c), false)) {
@@ -370,12 +211,17 @@ io.on("connection", (socket) => {
       socket.emit("buildRejected", { reason: "Only one square per turn" });
       return;
     }
+    const x = parseInt(pos && pos.x, 10);
+    const y = parseInt(pos && pos.y, 10);
+    if (!Number.isInteger(x) || !Number.isInteger(y)) {
+      socket.emit("buildRejected", { reason: "Bad request" });
+      return;
+    }
     if (!engine.isBuildable(x, y)) {
       socket.emit("buildRejected", { reason: "Can't build there" });
       return;
     }
-    const cost = settings.squareCost || 0;
-    if (!spend(c, cost)) {
+    if (!spend(c, settings.squareCost || 0)) {
       socket.emit("buildRejected", { reason: "Not enough credit" });
       return;
     }
@@ -402,6 +248,10 @@ io.on("connection", (socket) => {
       socket.emit("buyRejected", { reason: "Your king is in check — move first" });
       return;
     }
+    if (engine.turn !== c) {
+      socket.emit("buyRejected", { reason: "Not your turn" });
+      return;
+    }
     if (!engine.hasCell(x, y)) {
       socket.emit("buyRejected", { reason: "No such square" });
       return;
@@ -424,8 +274,6 @@ io.on("connection", (socket) => {
       socket.emit("buyRejected", { reason: "Not enough credit" });
       return;
     }
-    // buying a piece costs a turn — subject to race cap/cooldown (or classic turn)
-    if (turnActionBlocked(c, socket, "buyRejected")) return;
     const placed = engine.placePiece(x, y, type, c);
     if (!placed.ok) {
       socket.emit("buyRejected", { reason: "Cannot place there" });
@@ -433,7 +281,7 @@ io.on("connection", (socket) => {
     }
     spend(c, cost);
     awardZoneIncomeForBuy(x, y); // existing zone pieces earn; the new one does not
-    commitTurn(c); // counts as a turn: increments moves, mate check, turn pass
+    commitTurn(c); // counts as a turn: increments moves, passes turn, mate check
     broadcastState(null);
   });
 
@@ -462,5 +310,5 @@ io.on("connection", (socket) => {
 
 const PORT = process.env.PORT || 8080;
 server.listen(PORT, "0.0.0.0", () =>
-  console.log(`🚀 Chessmate (configurable race variant) running on :${PORT}`)
+  console.log(`🚀 Chessmate running on :${PORT}`)
 );
