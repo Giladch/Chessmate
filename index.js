@@ -37,6 +37,7 @@ let moves = { w: 0, b: 0 };
 let gameOver = null; // { winner: 'w'|'b'|null, reason }
 let credit = { w: 0, b: 0 };
 let builtThisTurn = { w: false, b: false }; // at most one square built per turn
+let aiColor = null; // if set ('w'|'b'), the server plays that colour as a basic AI
 
 function safe(fn, fallback) {
   try {
@@ -122,6 +123,7 @@ function buildState(lastMove) {
     gameOver,
     started: moves.w + moves.b > 0,
     credit: { w: credit.w, b: credit.b },
+    ai: aiColor,
     settings,
   };
 }
@@ -166,6 +168,50 @@ function commitTurn(c) {
   finishOutcome(c);
 }
 
+// Apply a board move for `color` (turn already verified). Handles earnings,
+// zone income, mate check, broadcast, and triggers the AI if it is next.
+function performMove(c, move) {
+  const result = engine.move(move, c);
+  if (!result) return null;
+  moves[c] += 1;
+  builtThisTurn[c] = false;
+  if (result.captured) earn(c, MATERIAL[result.captured] || 0);
+  awardZoneIncomeForMove(result.from, result.to);
+  finishOutcome(c);
+  broadcastState({ from: result.from, to: result.to });
+  maybeAiMove();
+  return result;
+}
+
+// Very basic AI: greedily take the highest-value capture / promotion, else a
+// random legal move. (Does not build or buy.)
+function pickAiMove(color) {
+  const ms = engine.legalMoves(color);
+  if (!ms.length) return null;
+  let best = [];
+  let bestVal = -1;
+  for (const m of ms) {
+    const tp = engine.getPiece(m.to.x, m.to.y);
+    let v = tp ? MATERIAL[tp.type] || 0 : 0;
+    if (m.promotion) v += 8;
+    if (v > bestVal) {
+      bestVal = v;
+      best = [m];
+    } else if (v === bestVal) {
+      best.push(m);
+    }
+  }
+  return best[Math.floor(Math.random() * best.length)];
+}
+function doAiMove() {
+  if (!aiColor || gameOver || engine.turn !== aiColor) return;
+  const mv = pickAiMove(aiColor);
+  if (mv) performMove(aiColor, mv);
+}
+function maybeAiMove() {
+  if (aiColor && !gameOver && engine.turn === aiColor) setTimeout(doAiMove, 500);
+}
+
 app.set("view engine", "ejs");
 app.use(express.static("public"));
 app.get("/", (req, res) => res.render("index", { title: "Chessmate" }));
@@ -198,17 +244,23 @@ io.on("connection", (socket) => {
       socket.emit("moveRejected", { reason: "Not your turn" });
       return;
     }
-    const result = engine.move(move, c);
+    const result = performMove(c, move);
     if (!result) {
       socket.emit("moveRejected", { reason: "Illegal move", kingThreat: illegalThreat(move, c) });
-      return;
     }
-    moves[c] += 1;
-    builtThisTurn[c] = false;
-    if (result.captured) earn(c, MATERIAL[result.captured] || 0);
-    awardZoneIncomeForMove(result.from, result.to);
-    finishOutcome(c);
-    broadcastState({ from: result.from, to: result.to });
+  });
+
+  socket.on("addAI", () => {
+    const c = colorOf(socket.id);
+    if (!c) return;
+    const opp = c === "w" ? "b" : "w";
+    const seat = opp === "w" ? "white" : "black";
+    if (players[seat] && players[seat] !== "__AI__") return; // a human holds it
+    players[seat] = "__AI__";
+    aiColor = opp;
+    io.emit("notice", { type: "default", text: "Added a computer opponent" });
+    broadcastState(null);
+    maybeAiMove();
   });
 
   socket.on("buildSquare", (pos) => {
@@ -306,12 +358,14 @@ io.on("connection", (socket) => {
     awardZoneIncomeForBuy(x, y); // existing zone pieces earn; the new one does not
     commitTurn(c); // counts as a turn: increments moves, passes turn, mate check
     broadcastState(null);
+    maybeAiMove();
   });
 
   socket.on("restartGame", () => {
     resetGame();
     broadcastState(null);
     io.emit("notice", { type: "restart", text: "Game restarted" });
+    maybeAiMove();
   });
 
   socket.on("offerDraw", () => socket.broadcast.emit("offerDraw"));

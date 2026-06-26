@@ -1,7 +1,9 @@
 const socket = io();
-const boardElement = document.getElementById("chessboard");
-const CELL = 60;
+const viewport = document.getElementById("viewport");
+const world = document.getElementById("world");
+const CELL = 64;
 
+let panX = 0, panY = 0, centered = false;
 let draggedPiece = null;
 let sourceSquare = null;
 let myColor = null; // 'w' | 'b' | null (spectator)
@@ -9,192 +11,34 @@ let lastMove = null;
 
 let boardData = { cells: [], pieces: {}, bbox: { minX: 0, minY: 0, maxX: 7, maxY: 7 }, zoneRows: [3, 4] };
 let cellsSet = new Set();
-
-let gameMoves = { w: 0, b: 0 };
 let gameTurn = "w";
-let gameStarted = false;
-let cooldown = {
-  w: { lead: 0, blocked: false, remainingMs: 0 },
-  b: { lead: 0, blocked: false, remainingMs: 0 },
-};
 let gameOver = null;
-let myCooldownUntil = 0;
-let lastAnnounced = null;
 let credit = { w: 0, b: 0 };
+let aiOn = null;
 let myInCheck = false;
 let builtThisTurnMe = false;
 
 let settings = {
   squareCost: 1,
-  startingCredit: 0,
   pieceCost: { p: 1, n: 3, b: 3, r: 5, q: 9 },
   zoneIncome: { p: 1, n: 0, b: 0, r: 0, q: 0 },
 };
 
-/* ── Material scoring ── */
-const PIECE_VALUE = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
-const START_COUNT = { p: 8, n: 2, b: 2, r: 2, q: 1 };
-const CAPTURE_ORDER = ["q", "r", "b", "n", "p"];
-
 const otherColor = (c) => (c === "w" ? "b" : "w");
-const fmt = (ms) => (Math.max(0, ms) / 1000).toFixed(1);
 const cellKey = (x, y) => x + "," + y;
+const RADIAL_SYM = { q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
+const GLYPH = { p: "♙", r: "♖", n: "♘", b: "♗", q: "♕", k: "♔" };
 
-function localRemaining() {
-  if (!myColor) return 0;
-  return Math.max(0, myCooldownUntil - Date.now());
+function worldPos(x, y) {
+  const flip = myColor === "b";
+  return { left: (flip ? -x : x) * CELL, top: (flip ? -y : y) * CELL };
 }
 
 function canIMove() {
-  if (!myColor || gameOver) return false;
-  if (!settings.raceEnabled) return gameTurn === myColor;
-  if (gameMoves.w + gameMoves.b === 0 && myColor !== "w") return false;
-  const lead = gameMoves[myColor] - gameMoves[otherColor(myColor)];
-  if (lead >= settings.leadCap) return false;
-  if (localRemaining() > 0) return false;
-  return true;
+  return !!myColor && !gameOver && gameTurn === myColor;
 }
 
-/**
- * Render the dynamic board: iterate existing cells and place each by its (x,y)
- * via CSS-grid. Black perspective is produced by mirroring the placement
- * arithmetic (NOT by CSS rotation), so pieces stay upright.
- */
-function isBuildableClient(x, y) {
-  if (cellsSet.has(cellKey(x, y))) return false;
-  for (let dx = -1; dx <= 1; dx++) {
-    for (let dy = -1; dy <= 1; dy++) {
-      if (dx === 0 && dy === 0) continue;
-      if (cellsSet.has(cellKey(x + dx, y + dy))) return true;
-    }
-  }
-  return false;
-}
-
-const renderBoard = () => {
-  const bb = boardData.bbox;
-  // expand by a 1-cell ring so buildable candidate cells around the board show
-  const rMinX = bb.minX - 1, rMaxX = bb.maxX + 1;
-  const rMinY = bb.minY - 1, rMaxY = bb.maxY + 1;
-  const cols = rMaxX - rMinX + 1;
-  const rows = rMaxY - rMinY + 1;
-  const flip = myColor === "b";
-  const colOf = (x) => (flip ? rMaxX - x : x - rMinX) + 1;
-  const rowOf = (y) => (flip ? rMaxY - y : y - rMinY) + 1;
-
-  boardElement.innerHTML = "";
-  boardElement.style.gridTemplateColumns = `repeat(${cols}, ${CELL}px)`;
-  boardElement.style.gridTemplateRows = `repeat(${rows}, ${CELL}px)`;
-  boardElement.style.width = cols * CELL + "px";
-  boardElement.style.height = rows * CELL + "px";
-
-  // existing cells
-  boardData.cells.forEach((k) => {
-    const ci = k.indexOf(",");
-    const x = parseInt(k.slice(0, ci), 10);
-    const y = parseInt(k.slice(ci + 1), 10);
-
-    const sq = document.createElement("div");
-    const parity = (((x + y) % 2) + 2) % 2;
-    sq.classList.add("square", parity === 0 ? "light" : "dark");
-    if (boardData.zoneRows && boardData.zoneRows.indexOf(y) !== -1) {
-      sq.classList.add("zone");
-    }
-    sq.dataset.x = x;
-    sq.dataset.y = y;
-    sq.style.gridColumnStart = colOf(x);
-    sq.style.gridRowStart = rowOf(y);
-
-    if (
-      lastMove &&
-      ((lastMove.from.x === x && lastMove.from.y === y) ||
-        (lastMove.to.x === x && lastMove.to.y === y))
-    ) {
-      sq.classList.add("highlight");
-    }
-
-    const p = boardData.pieces[k];
-    if (p) {
-      const pieceEl = document.createElement("div");
-      pieceEl.classList.add("piece", p.c === "w" ? "white" : "black");
-      pieceEl.innerText = getPieceUnicode({ type: p.t });
-      pieceEl.draggable = myColor === p.c && !gameOver;
-
-      pieceEl.addEventListener("dragstart", (event) => {
-        draggedPiece = pieceEl;
-        sourceSquare = { x, y };
-        event.dataTransfer.setData("text/plain", "");
-        pieceEl.classList.add("dragging");
-      });
-      pieceEl.addEventListener("dragend", () => {
-        draggedPiece = null;
-        sourceSquare = null;
-        pieceEl.classList.remove("dragging");
-      });
-      sq.appendChild(pieceEl);
-    }
-
-    sq.addEventListener("dragover", (event) => event.preventDefault());
-    sq.addEventListener("drop", (event) => {
-      event.preventDefault();
-      if (draggedPiece) {
-        handleMove(sourceSquare, {
-          x: parseInt(sq.dataset.x, 10),
-          y: parseInt(sq.dataset.y, 10),
-        });
-      }
-    });
-
-    boardElement.appendChild(sq);
-  });
-
-  // buildable candidate cells (only at the start of your own turn: seated, live,
-  // your turn, not in check, and you haven't already built this turn)
-  if (myColor && !gameOver && gameTurn === myColor && !myInCheck && !builtThisTurnMe) {
-    const affordable = credit[myColor] >= (settings.squareCost || 0);
-    for (let y = rMinY; y <= rMaxY; y++) {
-      for (let x = rMinX; x <= rMaxX; x++) {
-        if (!isBuildableClient(x, y)) continue;
-        const cand = document.createElement("div");
-        cand.className = "square buildable" + (affordable ? "" : " bad");
-        cand.dataset.bx = x;
-        cand.dataset.by = y;
-        cand.style.gridColumnStart = colOf(x);
-        cand.style.gridRowStart = rowOf(y);
-        cand.title = `Build square (${settings.squareCost || 0}₵)`;
-        cand.addEventListener("click", () => handleBuild(x, y));
-        boardElement.appendChild(cand);
-      }
-    }
-  }
-
-  updateScoreboard();
-};
-
-const handleBuild = (x, y) => {
-  if (!myColor || gameOver) return;
-  if (gameTurn !== myColor) {
-    showMessage("You can only expand on your turn.", "error");
-    return;
-  }
-  if (myInCheck) {
-    showMessage("Your king is in check — move first.", "error");
-    return;
-  }
-  if (builtThisTurnMe) {
-    showMessage("Only one square per turn.", "error");
-    return;
-  }
-  if (credit[myColor] < (settings.squareCost || 0)) {
-    showMessage("Not enough credit for a new square.", "error");
-    return;
-  }
-  socket.emit("buildSquare", { x, y });
-};
-
-/* ── Buy pieces: right-click long-press radial menu ── */
-const RADIAL_SYM = { q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
-
+/* ── home / pricing helpers (mirror the server) ── */
 function classifyHomeClient(x, y, color) {
   if (color === "w") {
     if (y >= 7) return "all";
@@ -205,9 +49,6 @@ function classifyHomeClient(x, y, color) {
   if (y === 1) return "pawn";
   return "none";
 }
-
-// dynamic buy pricing (mirrors the server): pawn always 1; otherwise
-// base * (owned + 1). Queen is capped at 2 total.
 function countMyPieces(color, type) {
   let n = 0;
   Object.keys(boardData.pieces).forEach((k) => {
@@ -224,33 +65,158 @@ function pieceBuyCostClient(color, type) {
 function queenMaxed(color) {
   return countMyPieces(color, "q") >= 2;
 }
-
-let radialLayer = null;
-function closeRadial() {
-  if (radialLayer) {
-    radialLayer.remove();
-    radialLayer = null;
+function isBuildableClient(x, y) {
+  if (cellsSet.has(cellKey(x, y))) return false;
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      if (dx === 0 && dy === 0) continue;
+      if (cellsSet.has(cellKey(x + dx, y + dy))) return true;
+    }
   }
+  return false;
 }
+
+/* ── rendering ── */
+function applyPan() {
+  world.style.transform = `translate(${panX}px, ${panY}px)`;
+}
+
+function centerBoard() {
+  const bb = boardData.bbox;
+  const flip = myColor === "b";
+  const cxWorld = ((flip ? -1 : 1) * (bb.minX + bb.maxX)) / 2 * CELL + CELL / 2;
+  const cyWorld = ((flip ? -1 : 1) * (bb.minY + bb.maxY)) / 2 * CELL + CELL / 2;
+  panX = window.innerWidth / 2 - cxWorld;
+  panY = window.innerHeight / 2 - cyWorld;
+  applyPan();
+}
+
+const renderBoard = () => {
+  world.innerHTML = "";
+
+  // existing cells
+  boardData.cells.forEach((k) => {
+    const ci = k.indexOf(",");
+    const x = parseInt(k.slice(0, ci), 10);
+    const y = parseInt(k.slice(ci + 1), 10);
+    const pos = worldPos(x, y);
+
+    const sq = document.createElement("div");
+    const parity = (((x + y) % 2) + 2) % 2;
+    sq.className = "square " + (parity === 0 ? "light" : "dark");
+    if (boardData.zoneRows && boardData.zoneRows.indexOf(y) !== -1) sq.classList.add("zone");
+    if (lastMove && ((lastMove.from.x === x && lastMove.from.y === y) || (lastMove.to.x === x && lastMove.to.y === y))) {
+      sq.classList.add("highlight");
+    }
+    sq.dataset.x = x;
+    sq.dataset.y = y;
+    sq.style.left = pos.left + "px";
+    sq.style.top = pos.top + "px";
+
+    const p = boardData.pieces[k];
+    if (p) {
+      const pieceEl = document.createElement("div");
+      pieceEl.className = "piece " + (p.c === "w" ? "white" : "black");
+      pieceEl.innerText = GLYPH[p.t] || "";
+      pieceEl.draggable = myColor === p.c && !gameOver;
+      pieceEl.addEventListener("dragstart", (event) => {
+        draggedPiece = pieceEl;
+        sourceSquare = { x, y };
+        event.dataTransfer.setData("text/plain", "");
+        pieceEl.classList.add("dragging");
+      });
+      pieceEl.addEventListener("dragend", () => {
+        draggedPiece = null;
+        sourceSquare = null;
+        pieceEl.classList.remove("dragging");
+      });
+      sq.appendChild(pieceEl);
+    }
+
+    sq.addEventListener("dragover", (e) => e.preventDefault());
+    sq.addEventListener("drop", (e) => {
+      e.preventDefault();
+      if (draggedPiece) handleMove(sourceSquare, { x: parseInt(sq.dataset.x, 10), y: parseInt(sq.dataset.y, 10) });
+    });
+
+    world.appendChild(sq);
+  });
+
+  // buildable candidates (only at the start of your own turn)
+  if (myColor && !gameOver && gameTurn === myColor && !myInCheck && !builtThisTurnMe) {
+    const bb = boardData.bbox;
+    const affordable = credit[myColor] >= (settings.squareCost || 0);
+    for (let y = bb.minY - 1; y <= bb.maxY + 1; y++) {
+      for (let x = bb.minX - 1; x <= bb.maxX + 1; x++) {
+        if (!isBuildableClient(x, y)) continue;
+        const pos = worldPos(x, y);
+        const cand = document.createElement("div");
+        cand.className = "square buildable" + (affordable ? "" : " bad");
+        cand.style.left = pos.left + "px";
+        cand.style.top = pos.top + "px";
+        cand.title = `Build (${settings.squareCost || 0}₵)`;
+        cand.addEventListener("click", () => {
+          if (suppressClick) return;
+          handleBuild(x, y);
+        });
+        world.appendChild(cand);
+      }
+    }
+  }
+
+  if (!centered) {
+    centerBoard();
+    centered = true;
+  }
+  updateCredits();
+};
+
+/* ── moves / building ── */
+const handleMove = (from, to) => {
+  if (!canIMove()) {
+    if (myColor && !gameOver) showMessage("Not your turn.", "error");
+    return;
+  }
+  const move = { from: { x: from.x, y: from.y }, to: { x: to.x, y: to.y } };
+  const p = boardData.pieces[cellKey(from.x, from.y)];
+  if (p && p.t === "p") {
+    const f = myColor === "w" ? -1 : 1;
+    if (!cellsSet.has(cellKey(to.x, to.y + f))) {
+      showPromotionUI((sel) => {
+        move.promotion = sel;
+        socket.emit("move", move);
+      });
+      return;
+    }
+  }
+  socket.emit("move", move);
+};
+
+const handleBuild = (x, y) => {
+  if (!myColor || gameOver) return;
+  if (gameTurn !== myColor) { showMessage("You can only expand on your turn.", "error"); return; }
+  if (myInCheck) { showMessage("Your king is in check — move first.", "error"); return; }
+  if (builtThisTurnMe) { showMessage("Only one square per turn.", "error"); return; }
+  if (credit[myColor] < (settings.squareCost || 0)) { showMessage("Not enough credit for a new square.", "error"); return; }
+  socket.emit("buildSquare", { x, y });
+};
+
+/* ── buy-pieces radial (right-click long-press) ── */
+let radialLayer = null;
+function closeRadial() { if (radialLayer) { radialLayer.remove(); radialLayer = null; } }
 
 function openRadial(x, y) {
   closeRadial();
   if (!myColor || gameOver) return;
-  if (gameTurn !== myColor) {
-    showMessage("You can only buy on your turn.", "error");
-    return;
-  }
-  if (myInCheck) {
-    showMessage("Your king is in check — move first.", "error");
-    return;
-  }
+  if (gameTurn !== myColor) { showMessage("You can only buy on your turn.", "error"); return; }
+  if (myInCheck) { showMessage("Your king is in check — move first.", "error"); return; }
   const key = cellKey(x, y);
   if (!cellsSet.has(key) || boardData.pieces[key]) return;
   const tier = classifyHomeClient(x, y, myColor);
   if (tier === "none") return;
   const types = tier === "pawn" ? ["p"] : ["q", "r", "b", "n", "p"];
 
-  const sqEl = boardElement.querySelector(`.square[data-x="${x}"][data-y="${y}"]`);
+  const sqEl = world.querySelector(`.square[data-x="${x}"][data-y="${y}"]`);
   if (!sqEl) return;
   const rect = sqEl.getBoundingClientRect();
   const cx = rect.left + rect.width / 2;
@@ -288,22 +254,18 @@ function openRadial(x, y) {
       closeRadial();
     });
     menu.appendChild(el);
-    opts.push({ el, t, ox, oy, affordable });
+    opts.push({ el, ox, oy });
   });
 
   layer.appendChild(menu);
   layer.addEventListener("mousemove", (e) => {
-    let best = null;
-    let bestd = Infinity;
+    let best = null, bestd = Infinity;
     opts.forEach((o) => {
       o.el.classList.remove("hover");
       const dx = e.clientX - (cx + o.ox);
       const dy = e.clientY - (cy + o.oy);
       const d = dx * dx + dy * dy;
-      if (d < bestd) {
-        bestd = d;
-        best = o;
-      }
+      if (d < bestd) { bestd = d; best = o; }
     });
     if (best && bestd < 60 * 60) best.el.classList.add("hover");
   });
@@ -320,398 +282,55 @@ function openRadial(x, y) {
     }
     closeRadial();
   });
-  layer.addEventListener("mousedown", (e) => {
-    if (e.target === layer) closeRadial();
-  });
+  layer.addEventListener("mousedown", (e) => { if (e.target === layer) closeRadial(); });
   layer.addEventListener("contextmenu", (e) => e.preventDefault());
   document.body.appendChild(layer);
   radialLayer = layer;
 }
 
 function wireBuyMenu() {
-  let pressTimer = null;
-  let pressCell = null;
-  boardElement.addEventListener("contextmenu", (e) => e.preventDefault());
-  boardElement.addEventListener("mousedown", (e) => {
+  let pressTimer = null, pressCell = null;
+  world.addEventListener("contextmenu", (e) => e.preventDefault());
+  world.addEventListener("mousedown", (e) => {
     if (e.button !== 2) return;
     const sq = e.target.closest(".square");
     if (!sq || sq.classList.contains("buildable")) return;
-    const x = parseInt(sq.dataset.x, 10);
-    const y = parseInt(sq.dataset.y, 10);
+    const x = parseInt(sq.dataset.x, 10), y = parseInt(sq.dataset.y, 10);
     if (isNaN(x) || isNaN(y)) return;
     pressCell = { x, y };
-    pressTimer = setTimeout(() => {
-      pressTimer = null;
-      openRadial(x, y);
-    }, 300);
+    pressTimer = setTimeout(() => { pressTimer = null; openRadial(x, y); }, 280);
   });
-  boardElement.addEventListener("mouseup", (e) => {
+  world.addEventListener("mouseup", (e) => {
     if (e.button !== 2) return;
-    if (pressTimer) {
-      clearTimeout(pressTimer);
-      pressTimer = null;
-      if (pressCell) openRadial(pressCell.x, pressCell.y); // quick right-click also opens
-    }
+    if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; if (pressCell) openRadial(pressCell.x, pressCell.y); }
   });
-  boardElement.addEventListener("mouseleave", () => {
-    if (pressTimer) {
-      clearTimeout(pressTimer);
-      pressTimer = null;
-    }
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeRadial();
-  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeRadial(); });
 }
 
-const handleMove = (from, to) => {
-  if (!canIMove()) {
-    if (!myColor || gameOver) return;
-    if (!settings.raceEnabled) {
-      showMessage("Not your turn.", "error");
-      return;
-    }
-    const lead = gameMoves[myColor] - gameMoves[otherColor(myColor)];
-    if (gameMoves.w + gameMoves.b === 0 && myColor !== "w") {
-      showMessage("White starts the game.", "error");
-    } else if (lead >= settings.leadCap) {
-      showMessage(
-        `You're ${settings.leadCap} moves ahead — wait for your opponent.`,
-        "error"
-      );
-    } else if (localRemaining() > 0) {
-      showMessage(`On cooldown: ${fmt(localRemaining())}s`, "error");
-    }
-    return;
-  }
-
-  const move = { from: { x: from.x, y: from.y }, to: { x: to.x, y: to.y } };
-  const p = boardData.pieces[cellKey(from.x, from.y)];
-
-  if (p && p.t === "p") {
-    const f = myColor === "w" ? -1 : 1;
-    if (!cellsSet.has(cellKey(to.x, to.y + f))) {
-      // pawn reaching the forward edge → promotion
-      showPromotionUI((selectedPiece) => {
-        move.promotion = selectedPiece;
-        socket.emit("move", move);
-      });
-      return;
-    }
-  }
-
-  socket.emit("move", move);
-};
-
-const getPieceUnicode = (piece) => {
-  const unicodeMap = { p: "♙", r: "♖", n: "♘", b: "♗", q: "♕", k: "♔" };
-  return unicodeMap[piece.type] || "";
-};
-
-/**
- * Scoreboard — captured-material points per player (from the board pieces).
- */
-function updateScoreboard() {
-  const cur = { w: {}, b: {} };
-  Object.keys(boardData.pieces).forEach((k) => {
-    const p = boardData.pieces[k];
-    cur[p.c][p.t] = (cur[p.c][p.t] || 0) + 1;
-  });
-
-  let scoreWhite = 0;
-  let scoreBlack = 0;
-  const capturedByWhite = [];
-  const capturedByBlack = [];
-
-  CAPTURE_ORDER.forEach((t) => {
-    const lostBlack = Math.max(0, START_COUNT[t] - (cur.b[t] || 0));
-    const lostWhite = Math.max(0, START_COUNT[t] - (cur.w[t] || 0));
-    for (let i = 0; i < lostBlack; i++) {
-      capturedByWhite.push(t);
-      scoreWhite += PIECE_VALUE[t];
-    }
-    for (let i = 0; i < lostWhite; i++) {
-      capturedByBlack.push(t);
-      scoreBlack += PIECE_VALUE[t];
-    }
-  });
-
-  // big number = spendable credit; small caption = captured material value
-  setText("whitePoints", credit.w);
-  setText("blackPoints", credit.b);
-  renderCaptured("whiteCaptured", capturedByWhite, "cap-b");
-  renderCaptured("blackCaptured", capturedByBlack, "cap-w");
-  setText("whiteLead", scoreWhite ? "♟" + scoreWhite : "");
-  setText("blackLead", scoreBlack ? "♟" + scoreBlack : "");
+/* ── HUD: credits + turn edges ── */
+function updateCredits() {
+  const me = myColor || "w";
+  const opp = otherColor(me);
+  const myEl = document.getElementById("myCredit");
+  const enEl = document.getElementById("enemyCredit");
+  if (myEl) myEl.textContent = credit[me] != null ? credit[me] : 0;
+  if (enEl) enEl.textContent = credit[opp] != null ? credit[opp] : 0;
 }
 
-function setText(id, value) {
-  const el = document.getElementById(id);
-  if (el) el.textContent = value;
+function updateEdges() {
+  const top = document.getElementById("edgeTop");
+  const bot = document.getElementById("edgeBottom");
+  top.className = "edge";
+  bot.className = "edge";
+  if (gameOver) return;
+  const turnC = gameTurn;
+  const colorClass = turnC === "w" ? "c-white" : "c-black";
+  let edge;
+  if (myColor) edge = turnC === myColor ? bot : top;
+  else edge = turnC === "w" ? bot : top;
+  edge.className = "edge " + colorClass + " active";
 }
 
-function renderCaptured(id, types, colorClass) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  el.innerHTML = "";
-  types.forEach((t) => {
-    const span = document.createElement("span");
-    span.className = colorClass;
-    span.textContent = getPieceUnicode({ type: t });
-    el.appendChild(span);
-  });
-}
-
-/**
- * Race status bar.
- */
-function updateRaceUI() {
-  const role = document.getElementById("raceRole");
-  const status = document.getElementById("raceStatus");
-  const counts = document.getElementById("raceCounts");
-  const bar = document.getElementById("cooldownBar");
-  const rules = document.getElementById("raceRules");
-  if (!status) return;
-
-  if (role) {
-    role.textContent =
-      myColor === "w"
-        ? "You are White ⚪"
-        : myColor === "b"
-        ? "You are Black ⚫"
-        : "Spectating";
-  }
-  if (counts) {
-    counts.textContent = `Moves — White ${gameMoves.w} · Black ${gameMoves.b}`;
-  }
-  if (rules) {
-    rules.textContent = settings.raceEnabled
-      ? `Race chess: up to ${settings.leadCap} moves ahead. Leading costs time — ` +
-        settings.delaysSec.map((s, i) => `+${i + 1}: ${s}s`).join(" · ") +
-        ". White moves first."
-      : "Classic chess: standard turn-by-turn play.";
-  }
-
-  let txt = "";
-  let pct = 0;
-
-  if (gameOver) {
-    txt =
-      gameOver.reason === "draw"
-        ? "Game over — draw"
-        : `Game over — ${gameOver.winner === "w" ? "White" : "Black"} wins`;
-  } else if (!myColor) {
-    txt = "Watching the game";
-  } else if (!settings.raceEnabled) {
-    txt = gameTurn === myColor ? "Your move" : "Opponent's move";
-    pct = gameTurn === myColor ? 100 : 0;
-  } else if (gameMoves.w + gameMoves.b === 0 && myColor !== "w") {
-    txt = "White starts the game";
-  } else {
-    const lead = gameMoves[myColor] - gameMoves[otherColor(myColor)];
-    const rem = localRemaining();
-    if (lead >= settings.leadCap) {
-      txt = `You lead by ${lead} — opponent must move`;
-    } else if (rem > 0) {
-      const total = (settings.delaysSec[lead - 1] || 3) * 1000;
-      txt = `Next move in ${fmt(rem)}s`;
-      pct = 100 * (1 - rem / total);
-    } else {
-      txt = lead > 0 ? `Your move — go! (lead +${lead})` : "Your move — go!";
-      pct = 100;
-    }
-  }
-
-  status.textContent = txt;
-  if (bar) bar.style.width = Math.max(0, Math.min(100, pct)) + "%";
-  boardElement.classList.toggle(
-    "locked",
-    !!myColor && !gameOver && !canIMove()
-  );
-}
-
-setInterval(updateRaceUI, 100);
-
-/**
- * Promotion UI.
- */
-const showPromotionUI = (onSelect) => {
-  const existingUI = document.querySelector(".promotion-container");
-  if (existingUI) existingUI.remove();
-
-  const overlay = document.createElement("div");
-  overlay.classList.add("overlay");
-
-  const promotionBox = document.createElement("div");
-  promotionBox.classList.add("promotion-container");
-
-  const title = document.createElement("p");
-  title.innerText = "Promote pawn to:";
-  promotionBox.appendChild(title);
-
-  const pieces = [
-    { type: "q", symbol: "♛" },
-    { type: "r", symbol: "♜" },
-    { type: "b", symbol: "♝" },
-    { type: "n", symbol: "♞" },
-  ];
-
-  pieces.forEach(({ type, symbol }) => {
-    const button = document.createElement("button");
-    button.classList.add("promotion-btn");
-    button.innerHTML = symbol;
-    button.addEventListener("click", () => {
-      onSelect(type);
-      document.body.removeChild(overlay);
-    });
-    promotionBox.appendChild(button);
-  });
-
-  overlay.appendChild(promotionBox);
-  document.body.appendChild(overlay);
-};
-
-/**
- * Flash messages.
- */
-const showMessage = (msg, type = "default") => {
-  const existing = document.querySelector(".game-message");
-  if (existing) existing.remove();
-
-  const box = document.createElement("div");
-  box.classList.add("game-message", `message-${type}`);
-  box.innerText = msg;
-
-  document.body.appendChild(box);
-  setTimeout(() => box.classList.add("visible"), 10);
-  setTimeout(() => {
-    box.classList.remove("visible");
-    setTimeout(() => box.remove(), 500);
-  }, 3000);
-};
-
-/**
- * Confirmation popup.
- */
-const showConfirmation = (message, yes, no, onYes, onNo) => {
-  const overlay = document.createElement("div");
-  overlay.classList.add("overlay");
-
-  const box = document.createElement("div");
-  box.classList.add("confirmation-box");
-
-  const text = document.createElement("p");
-  text.innerText = message;
-
-  const btnYes = document.createElement("button");
-  btnYes.innerText = yes;
-  btnYes.classList.add("btn-confirm");
-  btnYes.onclick = () => {
-    onYes();
-    document.body.removeChild(overlay);
-  };
-
-  const btnNo = document.createElement("button");
-  btnNo.innerText = no;
-  btnNo.classList.add("btn-cancel");
-  btnNo.onclick = () => {
-    onNo();
-    document.body.removeChild(overlay);
-  };
-
-  box.append(text, btnYes, btnNo);
-  overlay.appendChild(box);
-  document.body.appendChild(overlay);
-};
-
-/**
- * Game controls.
- */
-document.getElementById("restartGame").addEventListener("click", () => {
-  showConfirmation(
-    "Are you sure you want to restart?",
-    "Yes",
-    "No",
-    () => socket.emit("restartGame"),
-    () => showMessage("Restart canceled.")
-  );
-});
-
-document.getElementById("offerDraw").addEventListener("click", () => {
-  socket.emit("offerDraw");
-  showMessage("Draw offer sent.", "draw");
-});
-
-document.getElementById("resignGame").addEventListener("click", () => {
-  showConfirmation(
-    "Are you sure you want to resign?",
-    "Yes",
-    "No",
-    () => socket.emit("playerResigned"),
-    () => showMessage("Resignation canceled.")
-  );
-});
-
-/**
- * Server events.
- */
-socket.on("playerRole", (role) => {
-  myColor = role;
-  renderBoard();
-  updateRaceUI();
-});
-
-socket.on("spectator", () => {
-  myColor = null;
-  renderBoard();
-  updateRaceUI();
-});
-
-socket.on("gameState", (s) => {
-  if (s.board) {
-    boardData = s.board;
-    cellsSet = new Set(s.board.cells);
-  }
-
-  lastMove = s.lastMove
-    ? {
-        from: { x: s.lastMove.from.x, y: s.lastMove.from.y },
-        to: { x: s.lastMove.to.x, y: s.lastMove.to.y },
-      }
-    : null;
-
-  gameMoves = s.moves || { w: 0, b: 0 };
-  gameTurn = s.turn || "w";
-  gameStarted = !!s.started;
-  cooldown = s.cooldown || cooldown;
-  gameOver = s.gameOver || null;
-  if (s.credit) credit = s.credit;
-  if (s.settings) settings = s.settings;
-  const ic = s.inCheck || { w: false, b: false };
-  const bt = s.builtThisTurn || { w: false, b: false };
-  myInCheck = myColor ? !!ic[myColor] : false;
-  builtThisTurnMe = myColor ? !!bt[myColor] : false;
-
-  if (myColor) {
-    const cd = cooldown[myColor];
-    myCooldownUntil = cd && cd.remainingMs ? Date.now() + cd.remainingMs : 0;
-  }
-
-  renderBoard();
-  updateRaceUI();
-  announceGameOver();
-});
-
-socket.on("moveRejected", (d) => {
-  if (d && d.waitMs) myCooldownUntil = Date.now() + d.waitMs;
-  if (d && d.reason) {
-    showMessage(d.reason + (d.waitMs ? `: ${fmt(d.waitMs)}s` : ""), "error");
-  }
-  if (d && d.kingThreat) flashKing();
-  updateRaceUI();
-});
-
-// Flash the player's own king red twice (e.g. an illegal move while in check).
 function flashKing() {
   if (!myColor) return;
   let kk = null;
@@ -721,73 +340,165 @@ function flashKing() {
   });
   if (!kk) return;
   const ci = kk.indexOf(",");
-  const x = kk.slice(0, ci);
-  const y = kk.slice(ci + 1);
-  const sq = boardElement.querySelector(`.square[data-x="${x}"][data-y="${y}"]`);
+  const sq = world.querySelector(`.square[data-x="${kk.slice(0, ci)}"][data-y="${kk.slice(ci + 1)}"]`);
   if (!sq) return;
   sq.classList.remove("king-flash");
-  void sq.offsetWidth; // restart the animation if already applied
+  void sq.offsetWidth;
   sq.classList.add("king-flash");
   setTimeout(() => sq.classList.remove("king-flash"), 900);
 }
 
+/* ── popups ── */
+const showPromotionUI = (onSelect) => {
+  const existing = document.querySelector(".promotion-container");
+  if (existing) existing.parentElement.remove();
+  const overlay = document.createElement("div");
+  overlay.className = "overlay";
+  const box = document.createElement("div");
+  box.className = "promotion-container";
+  const title = document.createElement("p");
+  title.innerText = "Promote pawn to:";
+  box.appendChild(title);
+  [["q", "♛"], ["r", "♜"], ["b", "♝"], ["n", "♞"]].forEach(([type, sym]) => {
+    const b = document.createElement("button");
+    b.className = "promotion-btn";
+    b.innerHTML = sym;
+    b.addEventListener("click", () => { onSelect(type); document.body.removeChild(overlay); });
+    box.appendChild(b);
+  });
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+};
+
+const showMessage = (msg, type = "default") => {
+  const existing = document.querySelector(".game-message");
+  if (existing) existing.remove();
+  const box = document.createElement("div");
+  box.className = "game-message message-" + type;
+  box.innerText = msg;
+  document.body.appendChild(box);
+  setTimeout(() => box.classList.add("visible"), 10);
+  setTimeout(() => { box.classList.remove("visible"); setTimeout(() => box.remove(), 400); }, 3000);
+};
+
+const showConfirmation = (message, yes, no, onYes) => {
+  const overlay = document.createElement("div");
+  overlay.className = "overlay";
+  const box = document.createElement("div");
+  box.className = "confirmation-box";
+  const text = document.createElement("p");
+  text.innerText = message;
+  const btnYes = document.createElement("button");
+  btnYes.innerText = yes; btnYes.className = "btn-confirm";
+  btnYes.onclick = () => { onYes(); document.body.removeChild(overlay); };
+  const btnNo = document.createElement("button");
+  btnNo.innerText = no; btnNo.className = "btn-cancel";
+  btnNo.onclick = () => document.body.removeChild(overlay);
+  box.append(text, btnYes, btnNo);
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+};
+
+/* ── controls ── */
+document.getElementById("restartGame").addEventListener("click", () =>
+  showConfirmation("Restart the game?", "Yes", "No", () => socket.emit("restartGame"))
+);
+document.getElementById("offerDraw").addEventListener("click", () => {
+  socket.emit("offerDraw");
+  showMessage("Draw offer sent.", "draw");
+});
+document.getElementById("resignGame").addEventListener("click", () =>
+  showConfirmation("Resign the game?", "Yes", "No", () => socket.emit("playerResigned"))
+);
+document.getElementById("addAI").addEventListener("click", () => socket.emit("addAI"));
+
+/* ── panning ── */
+let panning = false, moved = false, startX = 0, startY = 0, panStartX = 0, panStartY = 0;
+let suppressClick = false;
+viewport.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0) return;
+  if (e.target.closest(".piece")) return; // piece drag handles itself
+  panning = true; moved = false;
+  startX = e.clientX; startY = e.clientY; panStartX = panX; panStartY = panY;
+  viewport.classList.add("panning");
+});
+window.addEventListener("pointermove", (e) => {
+  if (!panning) return;
+  const dx = e.clientX - startX, dy = e.clientY - startY;
+  if (Math.abs(dx) + Math.abs(dy) > 4) moved = true;
+  panX = panStartX + dx; panY = panStartY + dy;
+  applyPan();
+});
+window.addEventListener("pointerup", () => {
+  if (!panning) return;
+  panning = false;
+  viewport.classList.remove("panning");
+  if (moved) { suppressClick = true; setTimeout(() => (suppressClick = false), 0); }
+});
+
+/* ── server events ── */
+socket.on("playerRole", (role) => { myColor = role; centered = false; renderBoard(); updateEdges(); });
+socket.on("spectator", () => { myColor = null; centered = false; renderBoard(); updateEdges(); });
+
+let lastAnnounced = null;
+socket.on("gameState", (s) => {
+  if (s.board) { boardData = s.board; cellsSet = new Set(s.board.cells); }
+  lastMove = s.lastMove
+    ? { from: { x: s.lastMove.from.x, y: s.lastMove.from.y }, to: { x: s.lastMove.to.x, y: s.lastMove.to.y } }
+    : null;
+  gameTurn = s.turn || "w";
+  gameOver = s.gameOver || null;
+  if (s.credit) credit = s.credit;
+  if (s.settings) settings = s.settings;
+  aiOn = s.ai || null;
+  const ic = s.inCheck || { w: false, b: false };
+  const bt = s.builtThisTurn || { w: false, b: false };
+  myInCheck = myColor ? !!ic[myColor] : false;
+  builtThisTurnMe = myColor ? !!bt[myColor] : false;
+
+  renderBoard();
+  updateEdges();
+  // hide the AI button once a computer opponent is active or for spectators
+  const aiBtn = document.getElementById("addAI");
+  if (aiBtn) aiBtn.style.display = !myColor || aiOn ? "none" : "flex";
+  announceGameOver();
+});
+
+socket.on("moveRejected", (d) => {
+  if (d && d.reason) showMessage(d.reason, "error");
+  if (d && d.kingThreat) flashKing();
+});
+socket.on("buildRejected", (d) => { if (d && d.reason) showMessage(d.reason, "error"); });
+socket.on("buyRejected", (d) => { if (d && d.reason) showMessage(d.reason, "error"); });
 socket.on("notice", (n) => {
   if (n && n.text) showMessage(n.text, n.type || "default");
-  if (n && n.type === "restart") lastAnnounced = null;
+  if (n && n.type === "restart") { lastAnnounced = null; centered = false; }
 });
-
-socket.on("offerDraw", () => {
-  showConfirmation(
-    "Opponent offered a draw.",
-    "Accept",
-    "Reject",
-    () => socket.emit("drawAccepted"),
-    () => socket.emit("drawRejected")
-  );
-});
-
+socket.on("offerDraw", () => showConfirmation("Opponent offered a draw.", "Accept", "Reject",
+  () => socket.emit("drawAccepted")));
 socket.on("drawRejected", () => showMessage("Draw offer rejected.", "draw"));
 
-socket.on("buildRejected", (d) => {
-  if (d && d.reason) showMessage(d.reason, "error");
-});
-
-socket.on("buyRejected", (d) => {
-  if (d && d.reason) showMessage(d.reason, "error");
-});
-
 function announceGameOver() {
-  if (!gameOver) {
-    lastAnnounced = null;
-    return;
-  }
+  if (!gameOver) { lastAnnounced = null; return; }
   const key = `${gameOver.reason}:${gameOver.winner}`;
   if (key === lastAnnounced) return;
   lastAnnounced = key;
-
-  let msg;
-  let type = "draw";
+  let msg, type = "draw";
   if (gameOver.reason === "checkmate") {
     type = "resign";
-    msg =
-      gameOver.winner === myColor
-        ? "Checkmate — you win! 🎉"
-        : `Checkmate — ${gameOver.winner === "w" ? "White" : "Black"} wins.`;
+    msg = gameOver.winner === myColor ? "Checkmate — you win! 🎉" : `Checkmate — ${gameOver.winner === "w" ? "White" : "Black"} wins.`;
   } else if (gameOver.reason === "resign") {
     type = "resign";
-    msg =
-      gameOver.winner === myColor
-        ? "Opponent resigned — you win!"
-        : "You resigned.";
+    msg = gameOver.winner === myColor ? "Opponent resigned — you win!" : "You resigned.";
   } else {
     msg = "Game over — it's a draw.";
   }
   showMessage(msg, type);
 }
 
-/**
- * Init.
- */
+window.addEventListener("resize", () => { if (centered) centerBoard(); });
+
+/* ── init ── */
 wireBuyMenu();
 renderBoard();
-updateRaceUI();
+updateEdges();

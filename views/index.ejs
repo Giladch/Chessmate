@@ -5,697 +5,138 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Chessmate</title>
-    
-    <!-- Tailwind CSS -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    
     <style>
-        /* Background */
+        * { box-sizing: border-box; }
+        html, body { margin: 0; height: 100%; }
         body {
-            background: linear-gradient(135deg, #1e1e2f, #252542);
-            display: flex;
-            align-items: flex-start;
-            justify-content: center;
-            min-height: 100vh;
-            margin: 0;
-            padding: 28px 16px;
-            box-sizing: border-box;
-            color: white;
+            background: radial-gradient(circle at 50% 38%, #242440, #13131d 70%);
+            color: #fff;
             font-family: 'Poppins', sans-serif;
-        }
-
-        /* Two-column layout: dashboard (left) + game (right) */
-        .layout {
-            display: flex;
-            align-items: flex-start;
-            justify-content: center;
-            gap: 22px;
-            flex-wrap: wrap;
-        }
-
-        /* Chessboard Container (grid template + size set dynamically by JS) */
-        .chessboard {
-            display: grid;
-            width: 480px;
-            height: 480px;
-            border-radius: 16px;
-            border: 5px solid #34495e;
-            box-shadow: 0px 10px 30px rgba(0, 0, 0, 0.5);
-            position: relative;
-        }
-
-        /* Chessboard Squares */
-        .square {
-            width: 60px;
-            height: 60px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 42px;
-            font-weight: bold;
-            transition: background-color 0.3s ease-in-out;
-        }
-
-        /* Light and Dark Squares */
-        .square.light {
-            background-color: #f3d9b1;
-        }
-
-        .square.dark {
-            background-color: #b07c5c;
-        }
-
-        /* Hover Effect */
-        .square:hover {
-            background-color: rgba(255, 255, 255, 0.3);
-        }
-
-        /* Chess Pieces */
-        .piece {
-            font-size: 40px;
-            width: 100%;
-            height: 100%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: grab;
-            user-select: none;
-            transition: transform 0.2s ease-in-out;
-        }
-
-        /* Piece Colors */
-        .piece.white {
-            color: white;
-            text-shadow: 2px 2px 5px rgba(0, 0, 0, 0.8);
-        }
-
-        .piece.black {
-            color: black;
-            text-shadow: 2px 2px 5px rgba(255, 255, 255, 0.5);
-        }
-
-        /* Dragging Effect */
-        .dragging {
-            opacity: 0.7;
-        }
-
-        /* Board Rotation for Black Player */
-        .flipped {
-            transform: rotate(180deg);
-        }
-
-        .flipped .piece {
-            transform: rotate(180deg);
-        }
-
-        /* Title */
-        .title {
-            font-size: 36px;
-            font-weight: bold;
-            text-align: center;
-            margin-bottom: 20px;
-            color: #ecf0f1;
-            text-shadow: 2px 2px 10px rgba(255, 255, 255, 0.3);
-        }
-
-        /* Button Styles */
-        .btn {
-            padding: 12px 24px;
-            font-size: 18px;
-            font-weight: bold;
-            border-radius: 10px;
-            border: none;
-            cursor: pointer;
-            transition: all 0.3s ease-in-out;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            
-        }
-
-        .btn-restart {
-            background: #f39c12;
-            color: white;
-        }
-
-        .btn-restart:hover {
-            background: #e67e22;
-            transform: scale(1.1);
-        }
-
-        .btn-draw {
-            background: #3498db;
-            color: white;
-        }
-
-        .btn-draw:hover {
-            background: #2980b9;
-            transform: scale(1.1);
-        }
-
-        .btn-resign {
-            background: #e74c3c;
-            color: white;
-        }
-
-        .btn-resign:hover {
-            background: #c0392b;
-            transform: scale(1.1);
-        }
-
-        /* Controls Container */
-        .controls {
-            margin-top: 20px;
-            display: flex;
-            gap: 15px;
-        }
-
-        /* Modern Message Box */
-        .game-message {
-            position: fixed;
-            top: 20px;
-            right: -300px;
-            padding: 15px 25px;
-            border-radius: 8px;
-            font-size: 16px;
-            font-weight: bold;
-            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
-            opacity: 0;
-            transition: right 0.5s ease-in-out, opacity 0.5s ease-in-out;
-            z-index: 1000;
-            color: white;
-        }
-
-        /* Show message animation */
-        .game-message.visible {
-            right: 20px;
-            opacity: 1;
-        }
-
-        /* Color Variations */
-        .message-restart {
-            background: #f39c12;
-        }
-
-        .message-resign {
-            background: #e74c3c;
-        }
-
-        .message-draw {
-            background: #3498db;
-        }
-
-        .message-default {
-            background: rgba(30, 30, 30, 0.9);
-        }
-
-        /* Overlay for Confirmation */
-        .overlay {
-            position: fixed;
-            top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0, 0, 0, 0.5);
-            display: flex; justify-content: center; align-items: center;
-        }
-        
-        .promotion-container {
-            background: white;
-            padding: 20px;
-            border-radius: 10px;
-            text-align: center;
-            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
-        }
-        
-        .promotion-btn {
-            font-size: 24px;
-            margin: 5px;
-            width: 50px; height: 50px;
-            border: none;
-            cursor: pointer;
-            background: none;
-        }
-        
-        .promotion-btn:hover {
-            transform: scale(1.2);
-        }        
-        
-        /* Confirmation Box */
-        .confirmation-box {
-            background: #2c3e50;
-            padding: 20px;
-            border-radius: 10px;
-            text-align: center;
-            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
-            width: 300px;
-        }
-
-        .confirmation-box p {
-            color: #ecf0f1;
-            font-size: 18px;
-            font-weight: bold;
-            margin-bottom: 15px;
-        }
-
-        /* Confirmation Buttons */
-        .btn-confirm {
-            background: #27ae60;
-            color: white;
-            margin-right: 0.5rem;
-            height: 2rem;
-            width: 4rem;
-            border-radius:1rem;
-        }
-
-        .btn-cancel {
-            background: #e74c3c;
-            color: white;
-            height: 2rem;
-            width: 4rem;
-            border-radius:1rem;
-        }
-        /* Highlight last move */
-        .square.highlight {
-            background-color: rgba(255, 255, 0, 0.4) !important;
-        }
-
-        /* Scoreboard */
-        .scoreboard {
-            width: 480px;
-            display: flex;
-            justify-content: space-between;
-            gap: 12px;
-            margin-bottom: 14px;
-        }
-        .score-side {
-            flex: 1;
-            background: rgba(255, 255, 255, 0.06);
-            border: 1px solid #34495e;
-            border-radius: 10px;
-            padding: 8px 12px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            min-height: 46px;
-        }
-        .score-side.turn {
-            border-color: #f1c40f;
-            box-shadow: 0 0 10px rgba(241, 196, 15, 0.35);
-        }
-        .score-head {
-            display: flex;
-            flex-direction: column;
-            line-height: 1.1;
-        }
-        .score-label {
-            font-weight: bold;
-            font-size: 14px;
-            letter-spacing: 1px;
-            text-transform: uppercase;
-            color: #ecf0f1;
-        }
-        .score-lead {
-            font-size: 11px;
-            color: #2ecc71;
-            min-height: 13px;
-        }
-        .score-points {
-            font-size: 24px;
-            font-weight: bold;
-            color: #f1c40f;
-            min-width: 26px;
-            text-align: center;
-        }
-        .captured {
-            font-size: 20px;
-            line-height: 1;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 1px;
-            flex: 1;
-        }
-        .captured .cap-w {
-            color: #ffffff;
-            text-shadow: 0 0 2px rgba(0, 0, 0, 0.7);
-        }
-        .captured .cap-b {
-            color: #1c1c1c;
-            text-shadow: 0 0 2px rgba(255, 255, 255, 0.45);
-        }
-
-        /* Race bar */
-        .racebar {
-            width: 480px;
-            background: rgba(255, 255, 255, 0.06);
-            border: 1px solid #34495e;
-            border-radius: 10px;
-            padding: 10px 14px;
-            margin-top: 14px;
-            display: flex;
-            flex-direction: column;
-            gap: 7px;
-        }
-        .race-top {
-            display: flex;
-            justify-content: space-between;
-            font-size: 13px;
-            color: #ecf0f1;
-        }
-        .race-status {
-            font-size: 16px;
-            font-weight: bold;
-            color: #f1c40f;
-            min-height: 20px;
-        }
-        .cooldown-track {
-            height: 7px;
-            background: rgba(0, 0, 0, 0.3);
-            border-radius: 4px;
             overflow: hidden;
-        }
-        .cooldown-fill {
-            height: 100%;
-            width: 0%;
-            background: #2ecc71;
-            transition: width 0.1s linear;
-        }
-        .chessboard.locked {
-            opacity: 0.88;
-        }
-        .chessboard.locked .piece {
-            cursor: not-allowed;
-        }
-        .race-rules {
-            width: 480px;
-            font-size: 12px;
-            color: #9aa7b3;
-            margin-top: 8px;
-            text-align: center;
-            line-height: 1.5;
+            user-select: none;
         }
 
-        /* Settings dashboard */
-        .dashboard {
-            width: 264px;
-            background: rgba(255, 255, 255, 0.06);
-            border: 1px solid #34495e;
-            border-radius: 16px;
-            padding: 18px 18px 20px;
-            display: flex;
-            flex-direction: column;
-            gap: 14px;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
-            box-sizing: border-box;
-        }
-        .dash-title {
-            font-size: 20px;
-            font-weight: bold;
-            color: #ecf0f1;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .dash-sub {
-            font-size: 12px;
-            color: #9aa7b3;
-            margin-top: -8px;
-            line-height: 1.5;
-        }
-        .dash-row {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 10px;
-        }
-        .dash-label {
-            font-size: 14px;
-            color: #ecf0f1;
-        }
-        .dash-section {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            border-top: 1px solid rgba(255, 255, 255, 0.08);
-            padding-top: 14px;
-        }
-        .switch {
-            position: relative;
-            width: 52px;
-            height: 28px;
-            flex: none;
-        }
-        .switch input {
-            display: none;
-        }
-        .slider {
+        /* full-window pannable world */
+        #viewport { position: fixed; inset: 0; overflow: hidden; cursor: grab; }
+        #viewport.panning { cursor: grabbing; }
+        #world { position: absolute; left: 0; top: 0; will-change: transform; }
+
+        .square {
             position: absolute;
-            cursor: pointer;
-            inset: 0;
-            background: #555;
-            border-radius: 28px;
-            transition: 0.2s;
+            width: 64px; height: 64px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 44px; line-height: 1;
         }
-        .slider::before {
-            content: "";
-            position: absolute;
-            height: 22px;
-            width: 22px;
-            left: 3px;
-            top: 3px;
-            background: #fff;
-            border-radius: 50%;
-            transition: 0.2s;
+        .square.light { background: #f3d9b1; }
+        .square.dark { background: #b07c5c; }
+        .square.zone::after {
+            content: ""; position: absolute; inset: 0;
+            background: rgba(243, 156, 18, 0.22); pointer-events: none;
         }
-        .switch input:checked + .slider {
-            background: #2ecc71;
-        }
-        .switch input:checked + .slider::before {
-            transform: translateX(24px);
-        }
-        .stepper {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .stepper button {
-            width: 30px;
-            height: 30px;
-            border: none;
-            border-radius: 8px;
-            background: #34495e;
-            color: #fff;
-            font-size: 18px;
-            line-height: 1;
-            cursor: pointer;
-            transition: background 0.15s;
-        }
-        .stepper button:hover {
-            background: #3d5a73;
-        }
-        .stepper .val {
-            min-width: 26px;
-            text-align: center;
-            font-size: 18px;
-            font-weight: bold;
-            color: #f1c40f;
-        }
-        .delay-row {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 8px;
-        }
-        .delay-row input {
-            width: 64px;
-            padding: 6px 8px;
-            border-radius: 8px;
-            border: 1px solid #34495e;
-            background: rgba(0, 0, 0, 0.25);
-            color: #fff;
-            font-size: 14px;
-            text-align: center;
-        }
-        .delay-unit {
-            font-size: 13px;
-            color: #9aa7b3;
-            margin-left: 4px;
-        }
-        .dash-lock {
-            font-size: 12px;
-            color: #e67e22;
-            line-height: 1.5;
-        }
-        .dash-disabled {
-            opacity: 0.45;
-            pointer-events: none;
-        }
-        @media (max-width: 820px) {
-            .dashboard { width: 480px; order: 2; }
-        }
-
-        /* Orange income zone */
-        .square.zone {
-            box-shadow: inset 0 0 0 100px rgba(243, 156, 18, 0.20);
-        }
-
-        /* King-threatened flash (illegal move while in check) */
+        .square.highlight { box-shadow: inset 0 0 0 4px rgba(255, 255, 0, 0.5); }
+        .square.king-flash { animation: kingflash 0.4s ease-in-out 2; z-index: 5; }
         @keyframes kingflash {
             0% { box-shadow: inset 0 0 0 0 rgba(231, 76, 60, 0); }
-            50% { box-shadow: inset 0 0 0 100px rgba(231, 76, 60, 0.7); }
+            50% { box-shadow: inset 0 0 0 64px rgba(231, 76, 60, 0.78); }
             100% { box-shadow: inset 0 0 0 0 rgba(231, 76, 60, 0); }
         }
-        .square.king-flash {
-            animation: kingflash 0.4s ease-in-out 2;
-        }
 
-        /* Buildable candidate cells */
+        /* buildable candidate: grid on/off indication, stronger + animated */
         .square.buildable {
             background: transparent;
+            border: 2px dashed rgba(46, 204, 113, 0.35);
+            border-radius: 10px;
             cursor: pointer;
-            border-radius: 6px;
+            transition: background .15s ease, border-color .15s ease, box-shadow .15s ease, transform .12s ease;
         }
         .square.buildable:hover {
-            box-shadow: inset 0 0 0 3px #2ecc71;
-            background: rgba(46, 204, 113, 0.18);
-        }
-        .square.buildable.bad {
-            cursor: not-allowed;
-        }
-        .square.buildable.bad:hover {
-            box-shadow: inset 0 0 0 3px #e74c3c;
-            background: rgba(231, 76, 60, 0.18);
-        }
-
-        /* Buy-pieces radial menu */
-        .radial-capture {
-            position: fixed;
-            inset: 0;
-            z-index: 1100;
-        }
-        .radial-menu {
-            position: fixed;
-            transform: translate(-50%, -50%);
-            z-index: 1101;
-        }
-        .radial-option {
-            position: absolute;
-            transform: translate(-50%, -50%);
-            width: 48px;
-            height: 48px;
-            border-radius: 50%;
-            background: #2c3e50;
-            border: 2px solid #34495e;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            transition: transform 0.1s, border-color 0.1s;
-            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
-        }
-        .radial-option .ro-glyph {
-            font-size: 22px;
-            line-height: 1;
-        }
-        .radial-option .ro-glyph.ro-w { color: #fff; text-shadow: 0 0 2px #000; }
-        .radial-option .ro-glyph.ro-b { color: #111; text-shadow: 0 0 2px #fff; }
-        .radial-option .ro-cost {
-            font-size: 10px;
-            color: #f1c40f;
-        }
-        .radial-option.hover {
+            background: rgba(46, 204, 113, 0.32);
             border-color: #2ecc71;
-            transform: translate(-50%, -50%) scale(1.18);
+            box-shadow: inset 0 0 0 3px rgba(46, 204, 113, 0.65), 0 0 16px rgba(46, 204, 113, 0.45);
+            transform: scale(1.05);
         }
-        .radial-option.disabled {
-            opacity: 0.4;
-            cursor: not-allowed;
-        }
-        .radial-option.disabled.hover {
+        .square.buildable.bad { border-color: rgba(231, 76, 60, 0.4); }
+        .square.buildable.bad:hover {
+            background: rgba(231, 76, 60, 0.26);
             border-color: #e74c3c;
+            box-shadow: inset 0 0 0 3px rgba(231, 76, 60, 0.6);
         }
 
-        /* Economy inputs */
-        .econ-label {
-            font-size: 12px;
-            color: #9aa7b3;
-            margin-top: 2px;
-        }
-        .econInput {
-            width: 52px;
-            padding: 5px 6px;
-            border-radius: 8px;
-            border: 1px solid #34495e;
-            background: rgba(0, 0, 0, 0.25);
-            color: #fff;
-            font-size: 14px;
-            text-align: center;
-        }
-        .econ-grid {
-            display: flex;
-            gap: 6px;
-            flex-wrap: wrap;
-        }
-        .econ-cell {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 2px;
-        }
-        .econ-cell label {
-            font-size: 16px;
-            color: #ecf0f1;
-        }
-        .econ-cell .econInput {
-            width: 42px;
-        }
+        .piece { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; cursor: grab; }
+        .piece.white { color: #ffffff; text-shadow: 2px 2px 5px rgba(0, 0, 0, 0.8); }
+        .piece.black { color: #141414; text-shadow: 2px 2px 5px rgba(255, 255, 255, 0.5); }
+        .dragging { opacity: 0.6; }
 
+        /* HUD chips — single design line: rounded, shadow, translucent, opaque on hover */
+        .chip {
+            position: fixed; z-index: 50;
+            background: #ffffff; color: #111;
+            border-radius: 14px;
+            box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+            opacity: 0.45;
+            transition: opacity .18s ease, transform .1s ease;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .chip:hover { opacity: 1; }
+        .credit-chip { min-width: 54px; height: 54px; padding: 0 14px; font-size: 26px; font-weight: bold; }
+        #myCredit { left: 18px; bottom: 18px; }
+        #enemyCredit { right: 18px; top: 18px; }
+        #controls { position: fixed; right: 18px; bottom: 18px; z-index: 50; display: flex; gap: 8px; }
+        .icon-chip { width: 40px; height: 40px; font-size: 20px; font-weight: bold; cursor: pointer; border: none; font-family: inherit; }
+        .icon-chip:active { transform: scale(0.92); }
+
+        /* turn edges */
+        .edge { position: fixed; left: 0; right: 0; height: 90px; pointer-events: none; z-index: 40; opacity: 0; }
+        #edgeTop { top: 0; }
+        #edgeBottom { bottom: 0; }
+        .edge.active { animation: edgepulse 1.1s ease-in-out infinite; }
+        #edgeTop.c-white.active { box-shadow: inset 0 70px 60px -40px rgba(255, 255, 255, 0.7); }
+        #edgeTop.c-black.active { box-shadow: inset 0 70px 60px -40px rgba(0, 0, 0, 0.92); }
+        #edgeBottom.c-white.active { box-shadow: inset 0 -70px 60px -40px rgba(255, 255, 255, 0.7); }
+        #edgeBottom.c-black.active { box-shadow: inset 0 -70px 60px -40px rgba(0, 0, 0, 0.92); }
+        @keyframes edgepulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+
+        /* overlays */
+        .overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+        .promotion-container, .confirmation-box { background: #2c3e50; padding: 20px; border-radius: 12px; text-align: center; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5); }
+        .promotion-container p, .confirmation-box p { color: #ecf0f1; font-size: 18px; font-weight: bold; margin: 0 0 14px; }
+        .promotion-btn { font-size: 30px; width: 54px; height: 54px; margin: 4px; border: none; background: #34495e; color: #fff; border-radius: 10px; cursor: pointer; }
+        .promotion-btn:hover { background: #3d5a73; }
+        .btn-confirm, .btn-cancel { height: 36px; min-width: 72px; border: none; border-radius: 18px; color: #fff; font-weight: bold; cursor: pointer; margin: 0 6px; }
+        .btn-confirm { background: #27ae60; } .btn-cancel { background: #e74c3c; }
+        .game-message { position: fixed; top: 18px; left: 50%; transform: translateX(-50%); padding: 12px 22px; border-radius: 10px; font-weight: bold; color: #fff; z-index: 1200; opacity: 0; transition: opacity .4s; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4); }
+        .game-message.visible { opacity: 1; }
+        .message-default { background: rgba(30, 30, 30, 0.92); } .message-error { background: #c0392b; } .message-restart { background: #e67e22; } .message-draw { background: #2980b9; } .message-resign { background: #c0392b; }
+
+        /* buy radial menu */
+        .radial-capture { position: fixed; inset: 0; z-index: 1100; }
+        .radial-menu { position: fixed; transform: translate(-50%, -50%); z-index: 1101; }
+        .radial-option { position: absolute; transform: translate(-50%, -50%); width: 48px; height: 48px; border-radius: 50%; background: #2c3e50; border: 2px solid #34495e; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; transition: transform .1s, border-color .1s; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5); }
+        .radial-option .ro-glyph { font-size: 22px; line-height: 1; }
+        .radial-option .ro-glyph.ro-w { color: #fff; text-shadow: 0 0 2px #000; }
+        .radial-option .ro-glyph.ro-b { color: #141414; text-shadow: 0 0 2px #fff; }
+        .radial-option .ro-cost { font-size: 10px; color: #f1c40f; }
+        .radial-option.hover { border-color: #2ecc71; transform: translate(-50%, -50%) scale(1.18); }
+        .radial-option.disabled { opacity: 0.4; cursor: not-allowed; }
+        .radial-option.disabled.hover { border-color: #e74c3c; }
     </style>
 </head>
 
 <body>
-    <div class="layout">
-    <div class="flex flex-col items-center">
-        <div class="title">♜ Chessmate ♞</div>
-        <div id="scoreboard" class="scoreboard">
-            <div id="sideWhite" class="score-side">
-                <div class="score-head">
-                    <span class="score-label">White</span>
-                    <span id="whiteLead" class="score-lead"></span>
-                </div>
-                <span id="whitePoints" class="score-points">0</span>
-                <span id="whiteCaptured" class="captured"></span>
-            </div>
-            <div id="sideBlack" class="score-side">
-                <div class="score-head">
-                    <span class="score-label">Black</span>
-                    <span id="blackLead" class="score-lead"></span>
-                </div>
-                <span id="blackPoints" class="score-points">0</span>
-                <span id="blackCaptured" class="captured"></span>
-            </div>
-        </div>
-        <div id="chessboard" class="chessboard"></div>
-        <div class="controls">
-            <button id="restartGame" class="btn btn-restart">Restart Game</button>
-            <button id="offerDraw" class="btn btn-draw">Offer Draw</button>
-            <button id="resignGame" class="btn btn-resign">Resign</button>
-        </div>
-        <div id="raceBar" class="racebar">
-            <div class="race-top">
-                <span id="raceRole">—</span>
-                <span id="raceCounts">Moves — White 0 · Black 0</span>
-            </div>
-            <div id="raceStatus" class="race-status">Connecting…</div>
-            <div class="cooldown-track"><div id="cooldownBar" class="cooldown-fill"></div></div>
-        </div>
-        <div id="raceRules" class="race-rules">
-            Race chess: get up to 3 moves ahead of your opponent. Leading costs time.
-        </div>
-    </div>
+    <div id="viewport"><div id="world"></div></div>
+    <div id="edgeTop" class="edge"></div>
+    <div id="edgeBottom" class="edge"></div>
+    <div id="enemyCredit" class="chip credit-chip">0</div>
+    <div id="myCredit" class="chip credit-chip">0</div>
+    <div id="controls">
+        <button id="restartGame" class="chip icon-chip" title="Restart game">&#x21bb;</button>
+        <button id="offerDraw" class="chip icon-chip" title="Offer draw">&#xbd;</button>
+        <button id="resignGame" class="chip icon-chip" title="Resign">&#x2691;</button>
+        <button id="addAI" class="chip icon-chip" title="Play vs computer" style="font-size:13px;">AI</button>
     </div>
 
-    <!-- External Scripts -->
-    <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"
-        crossorigin="anonymous"></script>
-    <script src="/js/chess.js?v=14"></script>
+    <script src="https://cdn.socket.io/4.8.1/socket.io.min.js" crossorigin="anonymous"></script>
+    <script src="/js/chess.js?v=15"></script>
 </body>
 
 </html>
