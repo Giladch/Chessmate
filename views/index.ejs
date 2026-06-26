@@ -17,7 +17,7 @@
         }
 
         /* full-window pannable world */
-        #viewport { position: fixed; inset: 0; overflow: hidden; cursor: grab; }
+        #viewport { position: fixed; inset: 0; overflow: hidden; cursor: grab; touch-action: none; }
         #viewport.panning { cursor: grabbing; }
         #world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
 
@@ -66,11 +66,26 @@
             width: 100%; height: 100%;
             background-size: contain;
             background-repeat: no-repeat;
-            background-position: center;
+            background-position: center bottom;
+            transform-origin: center bottom;
             filter: drop-shadow(1px 2px 2px rgba(0, 0, 0, 0.45));
-            cursor: grab;
+            touch-action: none;
         }
-        .dragging { opacity: 0.6; }
+        /* landing indicator while dragging a piece */
+        .square.drop-ok {
+            box-shadow: inset 0 0 0 4px rgba(46, 204, 113, 0.9), 0 0 18px rgba(46, 204, 113, 0.5);
+            z-index: 3;
+        }
+        .drag-ghost {
+            position: fixed;
+            pointer-events: none;
+            z-index: 2000;
+            background-size: contain;
+            background-repeat: no-repeat;
+            background-position: center bottom;
+            filter: drop-shadow(2px 4px 4px rgba(0, 0, 0, 0.55));
+            opacity: 0.92;
+        }
 
         /* HUD chips — single design line: rounded, shadow, translucent, opaque on hover */
         .chip {
@@ -116,11 +131,11 @@
         /* buy radial menu */
         .radial-capture { position: fixed; inset: 0; z-index: 1100; }
         .radial-menu { position: fixed; transform: translate(-50%, -50%); z-index: 1101; }
-        .radial-option { position: absolute; transform: translate(-50%, -50%); width: 48px; height: 48px; border-radius: 50%; background: #2c3e50; border: 2px solid #34495e; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; transition: transform .1s, border-color .1s; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5); }
-        .radial-option .ro-glyph { font-size: 22px; line-height: 1; }
+        .radial-option { position: absolute; transform: translate(-50%, -50%); width: 96px; height: 96px; border-radius: 50%; background: #2c3e50; border: 3px solid #34495e; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; transition: transform .1s, border-color .1s; box-shadow: 0 6px 16px rgba(0, 0, 0, 0.55); }
+        .radial-option .ro-glyph { font-size: 42px; line-height: 1; }
         .radial-option .ro-glyph.ro-w { color: #fff; text-shadow: 0 0 2px #000; }
         .radial-option .ro-glyph.ro-b { color: #141414; text-shadow: 0 0 2px #fff; }
-        .radial-option .ro-cost { font-size: 10px; color: #f1c40f; }
+        .radial-option .ro-cost { font-size: 16px; color: #f1c40f; }
         .radial-option.hover { border-color: #2ecc71; transform: translate(-50%, -50%) scale(1.18); }
         .radial-option.disabled { opacity: 0.4; cursor: not-allowed; }
         .radial-option.disabled.hover { border-color: #e74c3c; }
@@ -141,7 +156,7 @@
     </div>
 
     <script src="https://cdn.socket.io/4.8.1/socket.io.min.js" crossorigin="anonymous"></script>
-    <script src="/js/chess.js?v=19"></script>
+    <script src="/js/chess.js?v=20"></script>
 </body>
 
 </html>

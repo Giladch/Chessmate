@@ -31,6 +31,8 @@ const RADIAL_SYM = { q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
 const GLYPH = { p: "♙", r: "♖", n: "♘", b: "♗", q: "♕", k: "♔" };
 // piece artwork tiers (more valuable piece = more refined art): t1..t4
 const PNAME = { p: "pawn", n: "knight", b: "bishop", r: "rook", q: "queen", k: "king" };
+// relative on-board size per type (shorter pieces are visually smaller)
+const PSIZE = { p: 0.62, n: 0.72, r: 0.72, b: 0.86, q: 0.95, k: 1.0 };
 // tier is per-piece (the Nth piece of a type a player owns -> tier N, capped at 4)
 function pieceImg(type, color, tier) {
   const t = Math.min(4, Math.max(1, tier || 1));
@@ -130,26 +132,16 @@ const renderBoard = () => {
       const pieceEl = document.createElement("div");
       pieceEl.className = "piece " + (p.c === "w" ? "white" : "black");
       pieceEl.style.backgroundImage = `url('${pieceImg(p.t, p.c, p.tier)}')`;
-      pieceEl.draggable = myColor === p.c && !gameOver;
-      pieceEl.addEventListener("dragstart", (event) => {
-        draggedPiece = pieceEl;
-        sourceSquare = { x, y };
-        event.dataTransfer.setData("text/plain", "");
-        pieceEl.classList.add("dragging");
-      });
-      pieceEl.addEventListener("dragend", () => {
-        draggedPiece = null;
-        sourceSquare = null;
-        pieceEl.classList.remove("dragging");
-      });
+      pieceEl.style.transform = `scale(${PSIZE[p.t] || 1})`;
+      const movable = myColor === p.c && !gameOver;
+      pieceEl.style.cursor = movable ? "grab" : "default";
+      if (movable) {
+        pieceEl.dataset.px = x;
+        pieceEl.dataset.py = y;
+        pieceEl.addEventListener("pointerdown", (e) => startPieceDrag(e, x, y, p, pieceEl));
+      }
       sq.appendChild(pieceEl);
     }
-
-    sq.addEventListener("dragover", (e) => e.preventDefault());
-    sq.addEventListener("drop", (e) => {
-      e.preventDefault();
-      if (draggedPiece) handleMove(sourceSquare, { x: parseInt(sq.dataset.x, 10), y: parseInt(sq.dataset.y, 10) });
-    });
 
     world.appendChild(sq);
   });
@@ -246,7 +238,7 @@ function openRadial(x, y) {
   const n = types.length;
   types.forEach((t, i) => {
     const ang = -Math.PI / 2 + i * ((2 * Math.PI) / n);
-    const R = n === 1 ? 0 : 64;
+    const R = n === 1 ? 0 : 112;
     const ox = Math.cos(ang) * R;
     const oy = Math.sin(ang) * R;
     const maxed = t === "q" && queenMaxed(myColor);
@@ -280,7 +272,7 @@ function openRadial(x, y) {
       const d = dx * dx + dy * dy;
       if (d < bestd) { bestd = d; best = o; }
     });
-    if (best && bestd < 60 * 60) best.el.classList.add("hover");
+    if (best && bestd < 100 * 100) best.el.classList.add("hover");
   });
   layer.addEventListener("mouseup", (e) => {
     if (e.button !== 2) return;
@@ -425,9 +417,64 @@ document.getElementById("resignGame").addEventListener("click", () =>
 );
 document.getElementById("addAI").addEventListener("click", () => socket.emit("addAI"));
 
-/* ── panning ── */
+/* ── panning + custom piece drag ── */
 let panning = false, moved = false, startX = 0, startY = 0, panStartX = 0, panStartY = 0;
 let suppressClick = false;
+let dragState = null; // { from:{x,y}, el, ghost, target }
+
+// screen coords -> board cell {x,y}
+function cellFromScreen(clientX, clientY) {
+  const flip = myColor === "b";
+  const cx = Math.floor((clientX - panX) / scale / CELL);
+  const cy = Math.floor((clientY - panY) / scale / CELL);
+  return { x: flip ? -cx : cx, y: flip ? -cy : cy };
+}
+
+function startPieceDrag(e, x, y, p, el) {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  e.stopPropagation();
+  el.style.opacity = "0.25";
+  const sizePx = CELL * scale * (PSIZE[p.t] || 1);
+  const ghost = document.createElement("div");
+  ghost.className = "drag-ghost";
+  ghost.style.width = sizePx + "px";
+  ghost.style.height = sizePx + "px";
+  ghost.style.backgroundImage = `url('${pieceImg(p.t, p.c, p.tier)}')`;
+  document.body.appendChild(ghost);
+  dragState = { from: { x, y }, el, ghost, target: null };
+  document.body.style.cursor = "grabbing";
+  positionGhost(e.clientX, e.clientY);
+  updateDropTarget(e.clientX, e.clientY);
+}
+function positionGhost(cx, cy) {
+  if (!dragState) return;
+  const g = dragState.ghost;
+  g.style.left = cx - g.offsetWidth / 2 + "px";
+  g.style.top = cy - g.offsetHeight / 2 + "px";
+}
+function updateDropTarget(cx, cy) {
+  document.querySelectorAll(".square.drop-ok").forEach((s) => s.classList.remove("drop-ok"));
+  const cell = cellFromScreen(cx, cy);
+  dragState.target = cellsSet.has(cellKey(cell.x, cell.y)) ? cell : null;
+  if (dragState.target) {
+    const sq = world.querySelector(`.square[data-x="${cell.x}"][data-y="${cell.y}"]`);
+    if (sq) sq.classList.add("drop-ok");
+  }
+}
+function endPieceDrag(cx, cy) {
+  const ds = dragState;
+  dragState = null;
+  document.body.style.cursor = "";
+  document.querySelectorAll(".square.drop-ok").forEach((s) => s.classList.remove("drop-ok"));
+  if (ds.ghost) ds.ghost.remove();
+  if (ds.el) ds.el.style.opacity = "";
+  const cell = cellFromScreen(cx, cy);
+  if (cellsSet.has(cellKey(cell.x, cell.y)) && !(cell.x === ds.from.x && cell.y === ds.from.y)) {
+    handleMove(ds.from, cell);
+  }
+}
+
 viewport.addEventListener("pointerdown", (e) => {
   if (e.button !== 0) return;
   if (e.target.closest(".piece")) return; // piece drag handles itself
@@ -436,13 +483,15 @@ viewport.addEventListener("pointerdown", (e) => {
   viewport.classList.add("panning");
 });
 window.addEventListener("pointermove", (e) => {
+  if (dragState) { positionGhost(e.clientX, e.clientY); updateDropTarget(e.clientX, e.clientY); return; }
   if (!panning) return;
   const dx = e.clientX - startX, dy = e.clientY - startY;
   if (Math.abs(dx) + Math.abs(dy) > 4) moved = true;
   panX = panStartX + dx; panY = panStartY + dy;
   applyPan();
 });
-window.addEventListener("pointerup", () => {
+window.addEventListener("pointerup", (e) => {
+  if (dragState) { endPieceDrag(e.clientX, e.clientY); return; }
   if (!panning) return;
   panning = false;
   viewport.classList.remove("panning");
