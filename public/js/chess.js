@@ -1,7 +1,7 @@
 const socket = io();
 const viewport = document.getElementById("viewport");
 const world = document.getElementById("world");
-const CELL = 64;
+const CELL = 96;
 
 let panX = 0, panY = 0, scale = 1, centered = false;
 let draggedPiece = null;

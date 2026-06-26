@@ -19,13 +19,13 @@
         /* full-window pannable world */
         #viewport { position: fixed; inset: 0; overflow: hidden; cursor: grab; }
         #viewport.panning { cursor: grabbing; }
-        #world { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
+        #world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
 
         .square {
             position: absolute;
-            width: 64px; height: 64px;
+            width: 96px; height: 96px;
             display: flex; align-items: center; justify-content: center;
-            font-size: 44px; line-height: 1;
+            line-height: 1;
         }
         .square.light { background: #f3d9b1; }
         .square.dark { background: #b07c5c; }
@@ -37,7 +37,7 @@
         .square.king-flash { animation: kingflash 0.4s ease-in-out 2; z-index: 5; }
         @keyframes kingflash {
             0% { box-shadow: inset 0 0 0 0 rgba(231, 76, 60, 0); }
-            50% { box-shadow: inset 0 0 0 64px rgba(231, 76, 60, 0.78); }
+            50% { box-shadow: inset 0 0 0 96px rgba(231, 76, 60, 0.78); }
             100% { box-shadow: inset 0 0 0 0 rgba(231, 76, 60, 0); }
         }
 
@@ -141,7 +141,7 @@
     </div>
 
     <script src="https://cdn.socket.io/4.8.1/socket.io.min.js" crossorigin="anonymous"></script>
-    <script src="/js/chess.js?v=18"></script>
+    <script src="/js/chess.js?v=19"></script>
 </body>
 
 </html>
