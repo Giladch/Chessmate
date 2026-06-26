@@ -28,11 +28,11 @@ let settings = {
   startingCredit: 0,
   squareCost: 2,
   pieceCost: { p: 1, n: 3, b: 3, r: 5, q: 9 },
-  zoneIncome: { p: 1, n: 2, b: 2, r: 3, q: 4 },
+  zoneIncome: { p: 1, n: 0, b: 0, r: 0, q: 0 },
 };
 const DEFAULT_DELAYS = [15, 15, 15, 15];
 const DEFAULT_PIECE_COST = { p: 1, n: 3, b: 3, r: 5, q: 9 };
-const DEFAULT_ZONE_INCOME = { p: 1, n: 2, b: 2, r: 3, q: 4 };
+const DEFAULT_ZONE_INCOME = { p: 1, n: 0, b: 0, r: 0, q: 0 };
 
 function clampNum(v, fallback, min, max) {
   let n = parseFloat(v);
@@ -99,14 +99,31 @@ function earn(color, amount) {
   credit[color] += Math.max(0, amount || 0);
 }
 
-// Each move is a "turn tick": every piece standing in the central zone earns
-// its per-turn income for its owner.
-function awardZoneIncome() {
+// Zone income is awarded per turn, but only for pieces that BOTH started and
+// ended the acting player's turn inside the zone. So a piece that just moved
+// into the zone, or one that was just bought, earns nothing this turn; a piece
+// that moved out of the zone naturally earns nothing (it no longer ends there).
+function awardZoneIncomeForMove(from, to) {
   engine.pieces.forEach((p, k) => {
     const ci = k.indexOf(",");
     const x = parseInt(k.slice(0, ci), 10);
     const y = parseInt(k.slice(ci + 1), 10);
-    if (engine.isInZone(x, y)) earn(p.color, settings.zoneIncome[p.type] || 0);
+    if (!engine.isInZone(x, y)) return; // must end the turn in the zone
+    // the piece that just moved (now at `to`) only counts if it also started
+    // the turn in the zone (i.e. its `from` square was in the zone)
+    if (x === to.x && y === to.y && !engine.isInZone(from.x, from.y)) return;
+    earn(p.color, settings.zoneIncome[p.type] || 0);
+  });
+}
+
+function awardZoneIncomeForBuy(bx, by) {
+  engine.pieces.forEach((p, k) => {
+    const ci = k.indexOf(",");
+    const x = parseInt(k.slice(0, ci), 10);
+    const y = parseInt(k.slice(ci + 1), 10);
+    if (!engine.isInZone(x, y)) return;
+    if (x === bx && y === by) return; // the just-bought piece earns nothing this turn
+    earn(p.color, settings.zoneIncome[p.type] || 0);
   });
 }
 
@@ -230,7 +247,6 @@ function commitTurn(c) {
   moves[c] += 1;
   lastMoveAt[c] = Date.now();
   builtThisTurn[c] = false;
-  awardZoneIncome();
   if (!settings.raceEnabled) engine.setTurn(c === "w" ? "b" : "w");
   finishOutcome(c);
 }
@@ -293,7 +309,7 @@ io.on("connection", (socket) => {
       lastMoveAt[c] = now;
       builtThisTurn[c] = false;
       if (result.captured) earn(c, MATERIAL[result.captured] || 0);
-      awardZoneIncome();
+      awardZoneIncomeForMove(result.from, result.to);
       finishOutcome(c);
       broadcastState({ from: result.from, to: result.to });
       return;
@@ -328,7 +344,7 @@ io.on("connection", (socket) => {
     lastMoveAt[c] = now;
     builtThisTurn[c] = false;
     if (result.captured) earn(c, MATERIAL[result.captured] || 0);
-    awardZoneIncome();
+    awardZoneIncomeForMove(result.from, result.to);
     finishOutcome(c);
     broadcastState({ from: result.from, to: result.to });
   });
@@ -416,7 +432,8 @@ io.on("connection", (socket) => {
       return;
     }
     spend(c, cost);
-    commitTurn(c); // counts as a turn: increments moves, zone tick, mate check
+    awardZoneIncomeForBuy(x, y); // existing zone pieces earn; the new one does not
+    commitTurn(c); // counts as a turn: increments moves, mate check, turn pass
     broadcastState(null);
   });
 
