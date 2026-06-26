@@ -39,6 +39,16 @@ function createEngine() {
   // castling rights: kingside (h-rook, +x) and queenside (a-rook, -x) per colour
   const castling = { w: { k: true, q: true }, b: { k: true, q: true } };
 
+  // artwork tier for a NEW piece = how many of that type the colour already owns
+  // (1-based), capped at 4. (1st knight -> t1, 2nd -> t2, 3rd -> t3, 4th+ -> t4.)
+  function tierFor(color, type) {
+    let n = 0;
+    pieces.forEach((p) => {
+      if (p.color === color && p.type === type) n++;
+    });
+    return Math.min(4, n + 1);
+  }
+
   const eng = {
     cells,
     pieces,
@@ -64,7 +74,7 @@ function createEngine() {
       if (!cells.has(k)) return { ok: false, reason: "no-cell" };
       if (pieces.has(k)) return { ok: false, reason: "occupied" };
       if (type === "k") return { ok: false, reason: "no-king" };
-      pieces.set(k, { type, color });
+      pieces.set(k, { type, color, tier: tierFor(color, type) });
       return { ok: true };
     },
     removePiece(x, y) {
@@ -117,7 +127,7 @@ function createEngine() {
       cells.forEach((k) => cellArr.push(k));
       const pieceObj = {};
       pieces.forEach((p, k) => {
-        pieceObj[k] = { t: p.type, c: p.color };
+        pieceObj[k] = { t: p.type, c: p.color, tier: p.tier || 1 };
       });
       return { cells: cellArr, pieces: pieceObj, bbox: eng.bbox(), zoneRows: ZONE_ROWS.slice() };
     },
@@ -346,11 +356,13 @@ function createEngine() {
         pieces.delete(KEY(4, by));
         pieces.set(KEY(mv.to.x, by), king);
         if (base.castle === "k") {
+          const rook = pieces.get(KEY(7, by));
           pieces.delete(KEY(7, by));
-          pieces.set(KEY(5, by), { type: "r", color });
+          pieces.set(KEY(5, by), rook); // preserve the rook (and its tier)
         } else {
+          const rook = pieces.get(KEY(0, by));
           pieces.delete(KEY(0, by));
-          pieces.set(KEY(3, by), { type: "r", color });
+          pieces.set(KEY(3, by), rook);
         }
         castling[color].k = false;
         castling[color].q = false;
@@ -377,7 +389,7 @@ function createEngine() {
       const toK = KEY(mv.to.x, mv.to.y);
       const captured = pieces.get(toK) || null;
       pieces.delete(fromK);
-      pieces.set(toK, promotion ? { type: promotion, color } : moving);
+      pieces.set(toK, promotion ? { type: promotion, color, tier: tierFor(color, promotion) } : moving);
       eng.turn = other(color);
 
       // update castling rights
@@ -415,11 +427,17 @@ function standardSetup() {
     for (let y = 0; y < 8; y++) eng.addCell(x, y);
   }
   const back = ["r", "n", "b", "q", "k", "b", "n", "r"];
+  const cnt = {}; // "color,type" -> running count, to assign starting tiers
+  const put = (x, y, type, color) => {
+    const ck = color + "," + type;
+    cnt[ck] = (cnt[ck] || 0) + 1;
+    eng.pieces.set(x + "," + y, { type, color, tier: Math.min(4, cnt[ck]) });
+  };
   for (let x = 0; x < 8; x++) {
-    eng.pieces.set(x + "," + BLACK_BACK, { type: back[x], color: "b" });
-    eng.pieces.set(x + "," + (BLACK_BACK + 1), { type: "p", color: "b" });
-    eng.pieces.set(x + "," + WHITE_BACK, { type: back[x], color: "w" });
-    eng.pieces.set(x + "," + (WHITE_BACK - 1), { type: "p", color: "w" });
+    put(x, BLACK_BACK, back[x], "b");
+    put(x, BLACK_BACK + 1, "p", "b");
+    put(x, WHITE_BACK, back[x], "w");
+    put(x, WHITE_BACK - 1, "p", "w");
   }
   eng.turn = "w";
   return eng;
