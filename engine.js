@@ -36,10 +36,14 @@ function createEngine() {
   const cells = new Set();
   const pieces = new Map(); // "x,y" -> { type, color }
 
+  // castling rights: kingside (h-rook, +x) and queenside (a-rook, -x) per colour
+  const castling = { w: { k: true, q: true }, b: { k: true, q: true } };
+
   const eng = {
     cells,
     pieces,
     turn: "w",
+    castling,
 
     /* ── cell / piece primitives ── */
     hasCell: (x, y) => cells.has(KEY(x, y)),
@@ -216,6 +220,23 @@ function createEngine() {
             const tp = pieces.get(tk);
             if (!tp || tp.color !== color) moves.push({ from: { x, y }, to: { x: x + dx, y: y + dy } });
           }
+          // castling: king on its home square (e-file, back rank), rights intact,
+          // path cells exist & empty, and the corner rook present. (Through-check
+          // safety is checked separately in isCastleLegal / legalMoves.)
+          const by = color === "w" ? WHITE_BACK : BLACK_BACK;
+          if (x === 4 && y === by) {
+            const empty = (cx) => cells.has(KEY(cx, by)) && !pieces.get(KEY(cx, by));
+            const rookAt = (cx) => {
+              const rp = pieces.get(KEY(cx, by));
+              return rp && rp.type === "r" && rp.color === color;
+            };
+            if (castling[color].k && rookAt(7) && empty(5) && empty(6)) {
+              moves.push({ from: { x: 4, y: by }, to: { x: 6, y: by }, castle: "k" });
+            }
+            if (castling[color].q && rookAt(0) && empty(1) && empty(2) && empty(3)) {
+              moves.push({ from: { x: 4, y: by }, to: { x: 2, y: by }, castle: "q" });
+            }
+          }
         } else {
           const dirs = p.type === "r" ? ROOK_DIRS : p.type === "b" ? BISHOP_DIRS : QUEEN_DIRS;
           for (const [dx, dy] of dirs) {
@@ -264,8 +285,20 @@ function createEngine() {
       return safe;
     },
 
+    // Castling-specific legality: not in check, and the king does not pass
+    // through or land on an attacked square.
+    isCastleLegal(color, side) {
+      const by = color === "w" ? WHITE_BACK : BLACK_BACK;
+      const opp = other(color);
+      if (eng.inCheck(color)) return false;
+      if (side === "k") return !eng.isAttacked(5, by, opp) && !eng.isAttacked(6, by, opp);
+      return !eng.isAttacked(3, by, opp) && !eng.isAttacked(2, by, opp);
+    },
+
     legalMoves(color) {
-      return eng.pseudoMoves(color).filter((m) => eng._safe(m, color));
+      return eng.pseudoMoves(color).filter((m) =>
+        m.castle ? eng.isCastleLegal(color, m.castle) : eng._safe(m, color)
+      );
     },
 
     // true if mv is a pseudo-legal move for `color` that would leave its own
@@ -305,6 +338,33 @@ function createEngine() {
       if (candidates.length === 0) return null;
       const base = candidates[0];
 
+      // castling: validate through-check safety, then move king + rook together
+      if (base.castle) {
+        if (!eng.isCastleLegal(color, base.castle)) return null;
+        const by = mv.from.y;
+        const king = pieces.get(KEY(4, by));
+        pieces.delete(KEY(4, by));
+        pieces.set(KEY(mv.to.x, by), king);
+        if (base.castle === "k") {
+          pieces.delete(KEY(7, by));
+          pieces.set(KEY(5, by), { type: "r", color });
+        } else {
+          pieces.delete(KEY(0, by));
+          pieces.set(KEY(3, by), { type: "r", color });
+        }
+        castling[color].k = false;
+        castling[color].q = false;
+        eng.turn = other(color);
+        return {
+          from: { x: 4, y: by },
+          to: { x: mv.to.x, y: by },
+          color,
+          captured: null,
+          promotion: null,
+          castle: base.castle,
+        };
+      }
+
       // promotion handling
       let promotion = null;
       if (base.promotion) {
@@ -319,6 +379,22 @@ function createEngine() {
       pieces.delete(fromK);
       pieces.set(toK, promotion ? { type: promotion, color } : moving);
       eng.turn = other(color);
+
+      // update castling rights
+      const by = color === "w" ? WHITE_BACK : BLACK_BACK;
+      const opp = other(color);
+      const oy = opp === "w" ? WHITE_BACK : BLACK_BACK;
+      if (moving.type === "k") {
+        castling[color].k = false;
+        castling[color].q = false;
+      } else if (moving.type === "r" && mv.from.y === by) {
+        if (mv.from.x === 0) castling[color].q = false;
+        if (mv.from.x === 7) castling[color].k = false;
+      }
+      if (captured && mv.to.y === oy) {
+        if (mv.to.x === 0) castling[opp].q = false;
+        if (mv.to.x === 7) castling[opp].k = false;
+      }
 
       return {
         from: { x: mv.from.x, y: mv.from.y },
