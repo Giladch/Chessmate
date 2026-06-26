@@ -21,6 +21,8 @@ let gameOver = null;
 let myCooldownUntil = 0;
 let lastAnnounced = null;
 let credit = { w: 0, b: 0 };
+let myInCheck = false;
+let builtThisTurnMe = false;
 
 let settings = { raceEnabled: true, leadCap: 2, delaysSec: [15] };
 const DEFAULT_DELAYS = [15, 15, 15, 15];
@@ -142,8 +144,9 @@ const renderBoard = () => {
     boardElement.appendChild(sq);
   });
 
-  // buildable candidate cells (only for seated players, game live)
-  if (myColor && !gameOver) {
+  // buildable candidate cells (only when allowed: seated, live, not in check,
+  // and you haven't already built this turn)
+  if (myColor && !gameOver && !myInCheck && !builtThisTurnMe) {
     const affordable = credit[myColor] >= (settings.squareCost || 0);
     for (let y = rMinY; y <= rMaxY; y++) {
       for (let x = rMinX; x <= rMaxX; x++) {
@@ -166,6 +169,14 @@ const renderBoard = () => {
 
 const handleBuild = (x, y) => {
   if (!myColor || gameOver) return;
+  if (myInCheck) {
+    showMessage("Your king is in check — move first.", "error");
+    return;
+  }
+  if (builtThisTurnMe) {
+    showMessage("Only one square per turn.", "error");
+    return;
+  }
   if (credit[myColor] < (settings.squareCost || 0)) {
     showMessage("Not enough credit for a new square.", "error");
     return;
@@ -198,6 +209,10 @@ function closeRadial() {
 function openRadial(x, y) {
   closeRadial();
   if (!myColor || gameOver) return;
+  if (myInCheck) {
+    showMessage("Your king is in check — move first.", "error");
+    return;
+  }
   const key = cellKey(x, y);
   if (!cellsSet.has(key) || boardData.pieces[key]) return;
   const tier = classifyHomeClient(x, y, myColor);
@@ -769,6 +784,10 @@ socket.on("gameState", (s) => {
   gameOver = s.gameOver || null;
   if (s.credit) credit = s.credit;
   if (s.settings) settings = s.settings;
+  const ic = s.inCheck || { w: false, b: false };
+  const bt = s.builtThisTurn || { w: false, b: false };
+  myInCheck = myColor ? !!ic[myColor] : false;
+  builtThisTurnMe = myColor ? !!bt[myColor] : false;
 
   if (myColor) {
     const cd = cooldown[myColor];
@@ -786,8 +805,29 @@ socket.on("moveRejected", (d) => {
   if (d && d.reason) {
     showMessage(d.reason + (d.waitMs ? `: ${fmt(d.waitMs)}s` : ""), "error");
   }
+  if (d && d.kingThreat) flashKing();
   updateRaceUI();
 });
+
+// Flash the player's own king red twice (e.g. an illegal move while in check).
+function flashKing() {
+  if (!myColor) return;
+  let kk = null;
+  Object.keys(boardData.pieces).forEach((k) => {
+    const p = boardData.pieces[k];
+    if (p.t === "k" && p.c === myColor) kk = k;
+  });
+  if (!kk) return;
+  const ci = kk.indexOf(",");
+  const x = kk.slice(0, ci);
+  const y = kk.slice(ci + 1);
+  const sq = boardElement.querySelector(`.square[data-x="${x}"][data-y="${y}"]`);
+  if (!sq) return;
+  sq.classList.remove("king-flash");
+  void sq.offsetWidth; // restart the animation if already applied
+  sq.classList.add("king-flash");
+  setTimeout(() => sq.classList.remove("king-flash"), 900);
+}
 
 socket.on("settingsRejected", (d) => {
   if (d && d.reason) showMessage(d.reason, "error");

@@ -268,6 +268,20 @@ function createEngine() {
       return eng.pseudoMoves(color).filter((m) => eng._safe(m, color));
     },
 
+    // true if mv is a pseudo-legal move for `color` that would leave its own
+    // king in check (i.e. rejected specifically because the king is threatened)
+    wouldExposeKing(mv, color) {
+      const cand = eng.pseudoMoves(color).find(
+        (m) =>
+          m.from.x === mv.from.x &&
+          m.from.y === mv.from.y &&
+          m.to.x === mv.to.x &&
+          m.to.y === mv.to.y
+      );
+      if (!cand) return false;
+      return !eng._safe({ from: mv.from, to: mv.to, promotion: cand.promotion }, color);
+    },
+
     isCheckmate: (color) => eng.inCheck(color) && eng.legalMoves(color).length === 0,
     isStalemate: (color) => !eng.inCheck(color) && eng.legalMoves(color).length === 0,
 

@@ -84,6 +84,7 @@ let moves = { w: 0, b: 0 };
 let lastMoveAt = { w: 0, b: 0 };
 let gameOver = null; // { winner: 'w'|'b'|null, reason }
 let credit = { w: 0, b: 0 }; // shared per-player points wallet
+let builtThisTurn = { w: false, b: false }; // at most one square built per turn
 
 // ── wallet API (used by capture/income now; squares/pieces in later phases) ──
 function canAfford(color, cost) {
@@ -152,6 +153,11 @@ function buildState(lastMove) {
     turn: engine.turn,
     cooldown: cooldownState(Date.now()),
     check: safe(() => engine.inCheck(engine.turn), false),
+    inCheck: {
+      w: safe(() => engine.inCheck("w"), false),
+      b: safe(() => engine.inCheck("b"), false),
+    },
+    builtThisTurn: { w: builtThisTurn.w, b: builtThisTurn.b },
     gameOver,
     started: moves.w + moves.b > 0,
     credit: { w: credit.w, b: credit.b },
@@ -169,6 +175,16 @@ function resetGame() {
   lastMoveAt = { w: 0, b: 0 };
   gameOver = null;
   credit = { w: settings.startingCredit || 0, b: settings.startingCredit || 0 };
+  builtThisTurn = { w: false, b: false };
+}
+
+// An illegal move is "king-threatening" if the mover is currently in check or
+// the attempted move would leave its own king in check (a pin).
+function illegalThreat(mv, c) {
+  return (
+    safe(() => engine.inCheck(c), false) ||
+    safe(() => engine.wouldExposeKing(mv, c), false)
+  );
 }
 
 // After `mover` plays, evaluate the opponent for checkmate / stalemate.
@@ -179,6 +195,44 @@ function finishOutcome(mover) {
   } else if (safe(() => engine.isStalemate(opp), false)) {
     gameOver = { winner: null, reason: "draw" };
   }
+}
+
+// Shared turn-gating for turn-consuming actions (a move OR a piece-buy). Emits
+// a rejection on `ev` and returns true if blocked.
+function turnActionBlocked(c, socket, ev) {
+  const other = c === "w" ? "b" : "w";
+  const now = Date.now();
+  if (settings.raceEnabled) {
+    if (moves.w + moves.b === 0 && c !== "w") {
+      socket.emit(ev, { reason: "White starts" });
+      return true;
+    }
+    const lead = moves[c] - moves[other];
+    if (lead >= effectiveCap()) {
+      socket.emit(ev, { reason: `Max ${effectiveCap()} moves ahead — wait for your opponent` });
+      return true;
+    }
+    const required = delayForLead(lead);
+    const waited = now - lastMoveAt[c];
+    if (waited < required) {
+      socket.emit(ev, { reason: "On cooldown", waitMs: required - waited });
+      return true;
+    }
+  } else if (engine.turn !== c) {
+    socket.emit(ev, { reason: "Not your turn" });
+    return true;
+  }
+  return false;
+}
+
+// Bookkeeping for a turn-consuming action (used by piece-buy; moves do it inline).
+function commitTurn(c) {
+  moves[c] += 1;
+  lastMoveAt[c] = Date.now();
+  builtThisTurn[c] = false;
+  awardZoneIncome();
+  if (!settings.raceEnabled) engine.setTurn(c === "w" ? "b" : "w");
+  finishOutcome(c);
 }
 
 app.set("view engine", "ejs");
@@ -232,11 +286,12 @@ io.on("connection", (socket) => {
       }
       const result = engine.move(move, c);
       if (!result) {
-        socket.emit("moveRejected", { reason: "Illegal move" });
+        socket.emit("moveRejected", { reason: "Illegal move", kingThreat: illegalThreat(move, c) });
         return;
       }
       moves[c] += 1;
       lastMoveAt[c] = now;
+      builtThisTurn[c] = false;
       if (result.captured) earn(c, MATERIAL[result.captured] || 0);
       awardZoneIncome();
       finishOutcome(c);
@@ -266,11 +321,12 @@ io.on("connection", (socket) => {
     forceTurn(c);
     const result = engine.move(move, c);
     if (!result) {
-      socket.emit("moveRejected", { reason: "Illegal move" });
+      socket.emit("moveRejected", { reason: "Illegal move", kingThreat: illegalThreat(move, c) });
       return;
     }
     moves[c] += 1;
     lastMoveAt[c] = now;
+    builtThisTurn[c] = false;
     if (result.captured) earn(c, MATERIAL[result.captured] || 0);
     awardZoneIncome();
     finishOutcome(c);
@@ -290,6 +346,14 @@ io.on("connection", (socket) => {
       socket.emit("buildRejected", { reason: "Bad request" });
       return;
     }
+    if (safe(() => engine.inCheck(c), false)) {
+      socket.emit("buildRejected", { reason: "Your king is in check — move first" });
+      return;
+    }
+    if (builtThisTurn[c]) {
+      socket.emit("buildRejected", { reason: "Only one square per turn" });
+      return;
+    }
     if (!engine.isBuildable(x, y)) {
       socket.emit("buildRejected", { reason: "Can't build there" });
       return;
@@ -300,6 +364,7 @@ io.on("connection", (socket) => {
       return;
     }
     engine.addCell(x, y);
+    builtThisTurn[c] = true;
     broadcastState(null);
   });
 
@@ -315,6 +380,10 @@ io.on("connection", (socket) => {
     const type = req && req.type;
     if (!Number.isInteger(x) || !Number.isInteger(y) || PTYPES.indexOf(type) === -1) {
       socket.emit("buyRejected", { reason: "Bad request" });
+      return;
+    }
+    if (safe(() => engine.inCheck(c), false)) {
+      socket.emit("buyRejected", { reason: "Your king is in check — move first" });
       return;
     }
     if (!engine.hasCell(x, y)) {
@@ -339,13 +408,15 @@ io.on("connection", (socket) => {
       socket.emit("buyRejected", { reason: "Not enough credit" });
       return;
     }
+    // buying a piece costs a turn — subject to race cap/cooldown (or classic turn)
+    if (turnActionBlocked(c, socket, "buyRejected")) return;
     const placed = engine.placePiece(x, y, type, c);
     if (!placed.ok) {
       socket.emit("buyRejected", { reason: "Cannot place there" });
       return;
     }
     spend(c, cost);
-    finishOutcome(c); // a bought piece may deliver check/mate
+    commitTurn(c); // counts as a turn: increments moves, zone tick, mate check
     broadcastState(null);
   });
 
