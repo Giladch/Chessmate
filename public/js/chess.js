@@ -27,6 +27,7 @@ let squaresBuilt = { w: 0, b: 0 };
 // sound dedup trackers (monotonic counters from the server state)
 let lastSoundMoveCount = -1;
 let lastBuiltTotal = -1;
+let lastPieceCount = -1; // drop in count on a move ⇒ a capture happened
 // when the local player moves, we play the sound instantly on mouse-release and
 // suppress the matching server echo so it isn't heard twice.
 let suppressOwnMoveEcho = false;
@@ -89,7 +90,7 @@ function playMoveSound(mv) {
 }
 // Preload every clip up front so the first play has no network latency.
 function preloadSounds() {
-  const names = ["build"];
+  const names = ["build", "capture"];
   ["pawn", "knight", "bishop", "rook", "queen", "king"].forEach((pn) => {
     for (let t = 1; t <= 4; t++) names.push(`${pn}_t${t}`);
   });
@@ -260,8 +261,13 @@ const handleMove = (from, to) => {
   }
   const move = { from: { x: from.x, y: from.y }, to: { x: to.x, y: to.y } };
   const p = boardData.pieces[cellKey(from.x, from.y)];
+  const capturing = !!boardData.pieces[cellKey(to.x, to.y)]; // enemy on the target = capture
   // play instantly on mouse-release; the opponent still hears it via the server echo
-  if (p) { playMoveSoundFor(p); suppressOwnMoveEcho = true; }
+  if (p) {
+    playMoveSoundFor(p);
+    if (capturing) playSfx("capture"); // layered on top of the movement sound
+    suppressOwnMoveEcho = true;
+  }
   if (p && p.t === "p") {
     const f = myColor === "w" ? -1 : 1;
     if (!cellsSet.has(cellKey(to.x, to.y + f))) {
@@ -718,6 +724,7 @@ socket.on("gameState", (s) => {
   // and a build sound whenever a square is added. Counters dedup re-renders.
   const moveTot = s.moves ? s.moves.w + s.moves.b : 0;
   const builtTot = s.squaresBuilt ? s.squaresBuilt.w + s.squaresBuilt.b : 0;
+  const pieceCount = boardData.pieces ? Object.keys(boardData.pieces).length : 0;
   if (lastSoundMoveCount < 0) {
     lastSoundMoveCount = moveTot; // first state on (re)connect — don't replay history
     lastBuiltTotal = builtTot;
@@ -727,12 +734,16 @@ socket.on("gameState", (s) => {
     if (lastMove && moveTot > lastSoundMoveCount) {
       // my own move was already played locally on release — don't double it
       if (suppressOwnMoveEcho) suppressOwnMoveEcho = false;
-      else playMoveSound(lastMove);
+      else {
+        playMoveSound(lastMove);
+        if (pieceCount < lastPieceCount) playSfx("capture"); // a piece was taken
+      }
     }
     if (builtTot > lastBuiltTotal) playSfx("build");
   }
   lastSoundMoveCount = moveTot;
   lastBuiltTotal = builtTot;
+  lastPieceCount = pieceCount;
 
   renderBoard();
   updateEdges();
