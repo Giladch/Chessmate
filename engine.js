@@ -483,4 +483,6 @@ function standardSetup() {
   return eng;
 }
 
-module.exports = { createEngine, standardSetup, KEY, forward, ZONE_ROWS };
+const __chessmateEngineAPI = { createEngine, standardSetup, KEY, forward, ZONE_ROWS };
+if (typeof module !== "undefined" && module.exports) module.exports = __chessmateEngineAPI;
+if (typeof window !== "undefined") window.ChessEngine = __chessmateEngineAPI;

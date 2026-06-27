@@ -28,6 +28,7 @@ let squaresBuilt = { w: 0, b: 0 };
 let lastSoundMoveCount = -1;
 let lastBuiltTotal = -1;
 let lastPieceCount = -1; // drop in count on a move ⇒ a capture happened
+let clientCastling = null; // castling rights mirrored from the server, for legality checks
 // when the local player moves, we play the sound instantly on mouse-release and
 // suppress the matching server echo so it isn't heard twice.
 let suppressOwnMoveEcho = false;
@@ -97,7 +98,7 @@ function playMoveSound(mv) {
 }
 // Preload every clip up front so the first play has no network latency.
 function preloadSounds() {
-  const names = ["build", "capture"];
+  const names = ["build", "capture", "illegal", "check"];
   ["pawn", "knight", "bishop", "rook", "queen", "king"].forEach((pn) => {
     for (let t = 1; t <= 4; t++) names.push(`${pn}_t${t}`);
   });
@@ -259,17 +260,63 @@ const renderBoard = () => {
   updateCredits();
 };
 
+/* ── client-side move legality (uses the SAME engine the server runs) ── */
+function buildClientEngine() {
+  const E = window.ChessEngine;
+  if (!E) return null;
+  const eng = E.createEngine();
+  cellsSet.forEach((k) => {
+    const i = k.indexOf(",");
+    eng.addCell(parseInt(k.slice(0, i), 10), parseInt(k.slice(i + 1), 10));
+  });
+  Object.keys(boardData.pieces).forEach((k) => {
+    const p = boardData.pieces[k];
+    eng.pieces.set(k, { type: p.t, color: p.c, tier: p.tier || 1 });
+  });
+  eng.turn = gameTurn;
+  if (clientCastling) {
+    eng.castling.w.k = clientCastling.w.k; eng.castling.w.q = clientCastling.w.q;
+    eng.castling.b.k = clientCastling.b.k; eng.castling.b.q = clientCastling.b.q;
+  }
+  return eng;
+}
+// True if from→to is a legal move for the local player. Fails OPEN (returns true)
+// if the engine isn't available, so a glitch never blocks legitimate play.
+function isLegalMoveClient(from, to) {
+  try {
+    const eng = buildClientEngine();
+    if (!eng) return true;
+    const cand = eng.pseudoMoves(myColor).find(
+      (m) => m.from.x === from.x && m.from.y === from.y && m.to.x === to.x && m.to.y === to.y
+    );
+    if (!cand) return false;
+    if (cand.castle) return eng.isCastleLegal(myColor, cand.castle);
+    return eng._safe({ from: from, to: to, promotion: cand.promotion }, myColor);
+  } catch (e) {
+    return true;
+  }
+}
+
 /* ── moves / building ── */
 const handleMove = (from, to) => {
   if (isReview()) return;
   if (!canIMove()) {
-    if (myColor && !gameOver) showMessage("Not your turn.", "error");
+    if (myColor && !gameOver) { showMessage("Not your turn.", "error"); playSfx("illegal"); }
     return;
   }
   const move = { from: { x: from.x, y: from.y }, to: { x: to.x, y: to.y } };
   const p = boardData.pieces[cellKey(from.x, from.y)];
+
+  // Illegal move: no piece sound — play the "illegal" cue instead. Still send it
+  // so the server's rejection drives the existing error message / king-flash.
+  if (!isLegalMoveClient(from, to)) {
+    playSfx("illegal");
+    socket.emit("move", move);
+    return;
+  }
+
   const capturing = !!boardData.pieces[cellKey(to.x, to.y)]; // enemy on the target = capture
-  // play instantly on mouse-release; the opponent still hears it via the server echo
+  // legal: play instantly on mouse-release; opponent hears it via the server echo
   if (p) {
     playMoveSoundFor(p);
     // castling: layer the rook's sound with the king's (rook still at its corner here)
@@ -731,9 +778,9 @@ socket.on("gameState", (s) => {
   myInCheck = myColor ? !!ic[myColor] : false;
   builtThisTurnMe = myColor ? !!bt[myColor] : false;
   if (s.squaresBuilt) squaresBuilt = s.squaresBuilt;
+  if (s.castling) clientCastling = s.castling;
 
-  // sounds: play the moved piece's tier sound for every new move (both players),
-  // and a build sound whenever a square is added. Counters dedup re-renders.
+  // sounds: per-move tier sound (both players), capture/check layered, build on expand.
   const moveTot = s.moves ? s.moves.w + s.moves.b : 0;
   const builtTot = s.squaresBuilt ? s.squaresBuilt.w + s.squaresBuilt.b : 0;
   const pieceCount = boardData.pieces ? Object.keys(boardData.pieces).length : 0;
@@ -743,13 +790,16 @@ socket.on("gameState", (s) => {
   } else {
     if (moveTot < lastSoundMoveCount) lastSoundMoveCount = moveTot; // game restarted
     if (builtTot < lastBuiltTotal) lastBuiltTotal = builtTot;
-    if (lastMove && moveTot > lastSoundMoveCount) {
-      // my own move was already played locally on release — don't double it
-      if (suppressOwnMoveEcho) suppressOwnMoveEcho = false;
-      else {
-        playMoveSound(lastMove);
-        if (pieceCount < lastPieceCount) playSfx("capture"); // a piece was taken
+    if (moveTot > lastSoundMoveCount) {
+      if (lastMove) {
+        // my own move was already played locally on release — don't double it
+        if (suppressOwnMoveEcho) suppressOwnMoveEcho = false;
+        else {
+          playMoveSound(lastMove);
+          if (pieceCount < lastPieceCount) playSfx("capture"); // a piece was taken
+        }
       }
+      if (s.check) playSfx("check"); // a check was delivered — both players hear it
     }
     if (builtTot > lastBuiltTotal) playSfx("build");
   }
@@ -780,6 +830,7 @@ socket.on("historyAppend", (e) => {
 });
 
 socket.on("moveRejected", (d) => {
+  suppressOwnMoveEcho = false; // a move we optimistically sounded was rejected — reset
   if (d && d.reason) showMessage(d.reason, "error");
   if (d && d.kingThreat) flashKing();
 });

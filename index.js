@@ -1,6 +1,7 @@
 const express = require("express");
 const socket = require("socket.io");
 const http = require("http");
+const path = require("path");
 const { standardSetup } = require("./engine");
 
 const app = express();
@@ -131,6 +132,10 @@ function buildState(lastMove) {
     credit: { w: credit.w, b: credit.b },
     ai: aiColor,
     settings,
+    castling: {
+      w: { k: engine.castling.w.k, q: engine.castling.w.q },
+      b: { k: engine.castling.b.k, q: engine.castling.b.q },
+    },
   };
 }
 
@@ -273,6 +278,10 @@ function maybeAiMove() {
 
 app.set("view engine", "ejs");
 app.use(express.static("public"));
+// serve the shared engine to the browser too (client uses it to validate moves)
+app.get("/js/engine.js", (req, res) =>
+  res.type("application/javascript").sendFile(path.join(__dirname, "engine.js"))
+);
 app.get("/", (req, res) => res.render("index", { title: "Chessmate" }));
 
 io.on("connection", (socket) => {
