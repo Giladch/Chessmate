@@ -85,8 +85,15 @@ function playMoveSoundFor(p) {
   if (n) playSfx(n);
 }
 function playMoveSound(mv) {
-  if (!mv || !mv.to) return;
-  playMoveSoundFor(boardData.pieces[cellKey(mv.to.x, mv.to.y)]); // piece that just landed
+  if (!mv || !mv.to || !mv.from) return;
+  const landed = boardData.pieces[cellKey(mv.to.x, mv.to.y)]; // piece that just landed
+  playMoveSoundFor(landed);
+  // castling (king moved two files): layer the rook's sound with the king's.
+  if (landed && landed.t === "k" && Math.abs(mv.to.x - mv.from.x) === 2 && mv.to.y === mv.from.y) {
+    const rookX = mv.to.x > mv.from.x ? mv.to.x - 1 : mv.to.x + 1; // rook now sits beside the king
+    const rook = boardData.pieces[cellKey(rookX, mv.to.y)];
+    if (rook && rook.t === "r") playMoveSoundFor(rook);
+  }
 }
 // Preload every clip up front so the first play has no network latency.
 function preloadSounds() {
@@ -265,6 +272,11 @@ const handleMove = (from, to) => {
   // play instantly on mouse-release; the opponent still hears it via the server echo
   if (p) {
     playMoveSoundFor(p);
+    // castling: layer the rook's sound with the king's (rook still at its corner here)
+    if (p.t === "k" && Math.abs(to.x - from.x) === 2 && to.y === from.y) {
+      const rook = boardData.pieces[cellKey(to.x > from.x ? 7 : 0, from.y)];
+      if (rook && rook.t === "r") playMoveSoundFor(rook);
+    }
     if (capturing) playSfx("capture"); // layered on top of the movement sound
     suppressOwnMoveEcho = true;
   }
