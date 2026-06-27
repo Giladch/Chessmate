@@ -27,6 +27,9 @@ let squaresBuilt = { w: 0, b: 0 };
 // sound dedup trackers (monotonic counters from the server state)
 let lastSoundMoveCount = -1;
 let lastBuiltTotal = -1;
+// when the local player moves, we play the sound instantly on mouse-release and
+// suppress the matching server echo so it isn't heard twice.
+let suppressOwnMoveEcho = false;
 
 let settings = {
   squareCost: 1,
@@ -71,12 +74,26 @@ function playSfx(name) {
     if (p && p.catch) p.catch(() => {});
   } catch (e) {}
 }
+function sfxNameFor(p) {
+  if (!p) return null;
+  const tier = Math.min(4, Math.max(1, p.tier || 1));
+  return `${PNAME[p.t]}_t${tier}`;
+}
+function playMoveSoundFor(p) {
+  const n = sfxNameFor(p);
+  if (n) playSfx(n);
+}
 function playMoveSound(mv) {
   if (!mv || !mv.to) return;
-  const p = boardData.pieces[cellKey(mv.to.x, mv.to.y)]; // piece that just landed
-  if (!p) return;
-  const tier = Math.min(4, Math.max(1, p.tier || 1));
-  playSfx(`${PNAME[p.t]}_t${tier}`);
+  playMoveSoundFor(boardData.pieces[cellKey(mv.to.x, mv.to.y)]); // piece that just landed
+}
+// Preload every clip up front so the first play has no network latency.
+function preloadSounds() {
+  const names = ["build"];
+  ["pawn", "knight", "bishop", "rook", "queen", "king"].forEach((pn) => {
+    for (let t = 1; t <= 4; t++) names.push(`${pn}_t${t}`);
+  });
+  names.forEach((n) => { const a = getSfx(n); if (a.load) a.load(); });
 }
 // Browsers block audio until the user interacts; prime playback on the first gesture.
 let audioUnlocked = false;
@@ -243,6 +260,8 @@ const handleMove = (from, to) => {
   }
   const move = { from: { x: from.x, y: from.y }, to: { x: to.x, y: to.y } };
   const p = boardData.pieces[cellKey(from.x, from.y)];
+  // play instantly on mouse-release; the opponent still hears it via the server echo
+  if (p) { playMoveSoundFor(p); suppressOwnMoveEcho = true; }
   if (p && p.t === "p") {
     const f = myColor === "w" ? -1 : 1;
     if (!cellsSet.has(cellKey(to.x, to.y + f))) {
@@ -705,7 +724,11 @@ socket.on("gameState", (s) => {
   } else {
     if (moveTot < lastSoundMoveCount) lastSoundMoveCount = moveTot; // game restarted
     if (builtTot < lastBuiltTotal) lastBuiltTotal = builtTot;
-    if (lastMove && moveTot > lastSoundMoveCount) playMoveSound(lastMove);
+    if (lastMove && moveTot > lastSoundMoveCount) {
+      // my own move was already played locally on release — don't double it
+      if (suppressOwnMoveEcho) suppressOwnMoveEcho = false;
+      else playMoveSound(lastMove);
+    }
     if (builtTot > lastBuiltTotal) playSfx("build");
   }
   lastSoundMoveCount = moveTot;
@@ -770,6 +793,7 @@ window.addEventListener("resize", () => { if (centered) centerBoard(); });
 /* ── init ── */
 window.addEventListener("pointerdown", unlockAudio);
 window.addEventListener("keydown", unlockAudio);
+preloadSounds();
 wireBuyMenu();
 wireMovePanel();
 renderBoard();
