@@ -697,19 +697,19 @@ socket.on("gameState", (s) => {
 
   // sounds: play the moved piece's tier sound for every new move (both players),
   // and a build sound whenever a square is added. Counters dedup re-renders.
-  const mc = s.moves ? s.moves.w + s.moves.b : 0;
-  const bt = s.squaresBuilt ? s.squaresBuilt.w + s.squaresBuilt.b : 0;
+  const moveTot = s.moves ? s.moves.w + s.moves.b : 0;
+  const builtTot = s.squaresBuilt ? s.squaresBuilt.w + s.squaresBuilt.b : 0;
   if (lastSoundMoveCount < 0) {
-    lastSoundMoveCount = mc; // first state on (re)connect — don't replay history
-    lastBuiltTotal = bt;
+    lastSoundMoveCount = moveTot; // first state on (re)connect — don't replay history
+    lastBuiltTotal = builtTot;
   } else {
-    if (mc < lastSoundMoveCount) lastSoundMoveCount = mc; // game restarted
-    if (bt < lastBuiltTotal) lastBuiltTotal = bt;
-    if (lastMove && mc > lastSoundMoveCount) playMoveSound(lastMove);
-    if (bt > lastBuiltTotal) playSfx("build");
+    if (moveTot < lastSoundMoveCount) lastSoundMoveCount = moveTot; // game restarted
+    if (builtTot < lastBuiltTotal) lastBuiltTotal = builtTot;
+    if (lastMove && moveTot > lastSoundMoveCount) playMoveSound(lastMove);
+    if (builtTot > lastBuiltTotal) playSfx("build");
   }
-  lastSoundMoveCount = mc;
-  lastBuiltTotal = bt;
+  lastSoundMoveCount = moveTot;
+  lastBuiltTotal = builtTot;
 
   renderBoard();
   updateEdges();
