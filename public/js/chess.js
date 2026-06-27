@@ -24,6 +24,9 @@ let aiOn = null;
 let myInCheck = false;
 let builtThisTurnMe = false;
 let squaresBuilt = { w: 0, b: 0 };
+// sound dedup trackers (monotonic counters from the server state)
+let lastSoundMoveCount = -1;
+let lastBuiltTotal = -1;
 
 let settings = {
   squareCost: 1,
@@ -43,6 +46,50 @@ const PSIZE = { p: 0.75, n: 0.82, r: 0.82, b: 0.90, q: 0.97, k: 1.0 };
 function pieceImg(type, color, tier) {
   const t = Math.min(4, Math.max(1, tier || 1));
   return `/pieces/${PNAME[type]}_${color === "w" ? "white" : "black"}_t${t}.png`;
+}
+
+/* ── sounds ── per-piece+tier move SFX (both players hear it via the server echo),
+   plus a build SFX when a square is added. */
+const SFX_VOLUME = 0.6;
+const sfxCache = {};
+let soundsEnabled = true;
+function getSfx(name) {
+  if (!sfxCache[name]) {
+    const a = new Audio(`/sounds/${name}.wav`);
+    a.preload = "auto";
+    a.volume = SFX_VOLUME;
+    sfxCache[name] = a;
+  }
+  return sfxCache[name];
+}
+function playSfx(name) {
+  if (!soundsEnabled) return;
+  try {
+    const a = getSfx(name).cloneNode(); // clone so rapid plays can overlap
+    a.volume = SFX_VOLUME;
+    const p = a.play();
+    if (p && p.catch) p.catch(() => {});
+  } catch (e) {}
+}
+function playMoveSound(mv) {
+  if (!mv || !mv.to) return;
+  const p = boardData.pieces[cellKey(mv.to.x, mv.to.y)]; // piece that just landed
+  if (!p) return;
+  const tier = Math.min(4, Math.max(1, p.tier || 1));
+  playSfx(`${PNAME[p.t]}_t${tier}`);
+}
+// Browsers block audio until the user interacts; prime playback on the first gesture.
+let audioUnlocked = false;
+function unlockAudio() {
+  if (audioUnlocked) return;
+  audioUnlocked = true;
+  try {
+    const a = getSfx("pawn_t1");
+    a.muted = true;
+    const p = a.play();
+    if (p && p.then) p.then(() => { a.pause(); a.currentTime = 0; a.muted = false; }).catch(() => { a.muted = false; });
+    else a.muted = false;
+  } catch (e) {}
 }
 
 function worldPos(x, y) {
@@ -648,6 +695,22 @@ socket.on("gameState", (s) => {
   builtThisTurnMe = myColor ? !!bt[myColor] : false;
   if (s.squaresBuilt) squaresBuilt = s.squaresBuilt;
 
+  // sounds: play the moved piece's tier sound for every new move (both players),
+  // and a build sound whenever a square is added. Counters dedup re-renders.
+  const mc = s.moves ? s.moves.w + s.moves.b : 0;
+  const bt = s.squaresBuilt ? s.squaresBuilt.w + s.squaresBuilt.b : 0;
+  if (lastSoundMoveCount < 0) {
+    lastSoundMoveCount = mc; // first state on (re)connect — don't replay history
+    lastBuiltTotal = bt;
+  } else {
+    if (mc < lastSoundMoveCount) lastSoundMoveCount = mc; // game restarted
+    if (bt < lastBuiltTotal) lastBuiltTotal = bt;
+    if (lastMove && mc > lastSoundMoveCount) playMoveSound(lastMove);
+    if (bt > lastBuiltTotal) playSfx("build");
+  }
+  lastSoundMoveCount = mc;
+  lastBuiltTotal = bt;
+
   renderBoard();
   updateEdges();
   // hide the AI button once a computer opponent is active or for spectators
@@ -705,6 +768,8 @@ function announceGameOver() {
 window.addEventListener("resize", () => { if (centered) centerBoard(); });
 
 /* ── init ── */
+window.addEventListener("pointerdown", unlockAudio);
+window.addEventListener("keydown", unlockAudio);
 wireBuyMenu();
 wireMovePanel();
 renderBoard();
